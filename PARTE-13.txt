@@ -1,0 +1,1083 @@
+n({
+  className,
+  type = "button",
+  variant = "ghost",
+  size = "xs",
+  ...props
+}: Omit<React.ComponentProps<typeof Button>, "size"> &
+  VariantProps<typeof inputGroupButtonVariants>) {
+  return (
+    <Button
+      type={type}
+      data-size={size}
+      variant={variant}
+      className={cn(inputGroupButtonVariants({ size }), className)}
+      {...props}
+    />
+  );
+}
+
+function InputGroupText({ className, ...props }: React.ComponentProps<"span">) {
+  return (
+    <span
+      className={cn(
+        "flex items-center gap-2 text-sm text-muted-foreground [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function InputGroupInput({
+  className,
+  ...props
+}: React.ComponentProps<"input">) {
+  return (
+    <Input
+      data-slot="input-group-control"
+      className={cn(
+        "flex-1 rounded-none border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function InputGroupTextarea({
+  className,
+  ...props
+}: React.ComponentProps<"textarea">) {
+  return (
+    <Textarea
+      data-slot="input-group-control"
+      className={cn(
+        "flex-1 resize-none rounded-none border-0 bg-transparent py-3 shadow-none focus-visible:ring-0 dark:bg-transparent",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupText,
+  InputGroupInput,
+  InputGroupTextarea,
+};
+
+===== FIN: components/ui/input-group.tsx =====
+
+
+===== ARCHIVO: components/ui/input-otp.tsx =====
+"use client";
+
+import * as React from "react";
+import { OTPInput, OTPInputContext } from "input-otp";
+import { MinusIcon } from "lucide-react";
+
+import { cn } from "@/lib/utils";
+
+function InputOTP({
+  className,
+  containerClassName,
+  ...props
+}: React.ComponentProps<typeof OTPInput> & {
+  containerClassName?: string;
+}) {
+  return (
+    <OTPInput
+      data-slot="input-otp"
+      containerClassName={cn(
+        "flex items-center gap-2 has-disabled:opacity-50",
+        containerClassName,
+      )}
+      className={cn("disabled:cursor-not-allowed", className)}
+      {...props}
+    />
+  );
+}
+
+function InputOTPGroup({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="input-otp-group"
+      className={cn("flex items-center", className)}
+      {...props}
+    />
+  );
+}
+
+function InputOTPSlot({
+  index,
+  className,
+  ...props
+}: React.ComponentProps<"div"> & {
+  index: number;
+}) {
+  const inputOTPContext = React.useContext(OTPInputContext);
+  const { char, hasFakeCaret, isActive } = inputOTPContext?.slots[index] ?? {};
+
+  return (
+    <div
+      data-slot="input-otp-slot"
+      data-active={isActive}
+      className={cn(
+        "relative flex h-9 w-9 items-center justify-center border-y border-r border-input text-sm shadow-xs transition-all outline-none first:rounded-l-md first:border-l last:rounded-r-md aria-invalid:border-destructive data-[active=true]:z-10 data-[active=true]:border-ring data-[active=true]:ring-[3px] data-[active=true]:ring-ring/50 data-[active=true]:aria-invalid:border-destructive data-[active=true]:aria-invalid:ring-destructive/20 dark:bg-input/30 dark:data-[active=true]:aria-invalid:ring-destructive/40",
+        className,
+      )}
+      {...props}
+    >
+      {char}
+      {hasFakeCaret && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="h-4 w-px animate-caret-blink bg-foreground duration-1000" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InputOTPSeparator({ ...props }: React.ComponentProps<"div">) {
+  return (
+    <div data-slot="input-otp-separator" role="separator" {...props}>
+      <MinusIcon />
+    </div>
+  );
+}
+
+export { InputOTP, InputOTPGroup, InputOTPSlot, InputOTPSeparator };
+
+===== FIN: components/ui/input-otp.tsx =====
+
+
+===== ARCHIVO: components/ui/input.tsx =====
+import * as React from "react";
+
+import { cn } from "@/lib/utils";
+
+function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+  return (
+    <input
+      type={type}
+      data-slot="input"
+      className={cn(
+        "h-9 w-full min-w-0 rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-input/30",
+        "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        "aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export { Input };
+
+===== FIN: components/ui/input.tsx =====
+
+
+===== ARCHIVO: components/ui/item.tsx =====
+import * as React from "react";
+import { cva, type VariantProps } from "class-variance-authority";
+import { Slot } from "radix-ui";
+
+import { cn } from "@/lib/utils";
+import { Separator } from "@/components/ui/separator";
+
+function ItemGroup({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      role="list"
+      data-slot="item-group"
+      className={cn("group/item-group flex flex-col", className)}
+      {...props}
+    />
+  );
+}
+
+function ItemSeparator({
+  className,
+  ...props
+}: React.ComponentProps<typeof Separator>) {
+  return (
+    <Separator
+      data-slot="item-separator"
+      orientation="horizontal"
+      className={cn("my-0", className)}
+      {...props}
+    />
+  );
+}
+
+const itemVariants = cva(
+  "group/item flex flex-wrap items-center rounded-md border border-transparent text-sm transition-colors duration-100 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 [a]:transition-colors [a]:hover:bg-accent/50",
+  {
+    variants: {
+      variant: {
+        default: "bg-transparent",
+        outline: "border-border",
+        muted: "bg-muted/50",
+      },
+      size: {
+        default: "gap-4 p-4",
+        sm: "gap-2.5 px-4 py-3",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  },
+);
+
+function Item({
+  className,
+  variant = "default",
+  size = "default",
+  asChild = false,
+  ...props
+}: React.ComponentProps<"div"> &
+  VariantProps<typeof itemVariants> & { asChild?: boolean }) {
+  const Comp = asChild ? Slot.Root : "div";
+  return (
+    <Comp
+      data-slot="item"
+      data-variant={variant}
+      data-size={size}
+      className={cn(itemVariants({ variant, size, className }))}
+      {...props}
+    />
+  );
+}
+
+const itemMediaVariants = cva(
+  "flex shrink-0 items-center justify-center gap-2 group-has-[[data-slot=item-description]]/item:translate-y-0.5 group-has-[[data-slot=item-description]]/item:self-start [&_svg]:pointer-events-none",
+  {
+    variants: {
+      variant: {
+        default: "bg-transparent",
+        icon: "size-8 rounded-sm border bg-muted [&_svg:not([class*='size-'])]:size-4",
+        image:
+          "size-10 overflow-hidden rounded-sm [&_img]:size-full [&_img]:object-cover",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  },
+);
+
+function ItemMedia({
+  className,
+  variant = "default",
+  ...props
+}: React.ComponentProps<"div"> & VariantProps<typeof itemMediaVariants>) {
+  return (
+    <div
+      data-slot="item-media"
+      data-variant={variant}
+      className={cn(itemMediaVariants({ variant, className }))}
+      {...props}
+    />
+  );
+}
+
+function ItemContent({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="item-content"
+      className={cn(
+        "flex flex-1 flex-col gap-1 [&+[data-slot=item-content]]:flex-none",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function ItemTitle({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="item-title"
+      className={cn(
+        "flex w-fit items-center gap-2 text-sm leading-snug font-medium",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function ItemDescription({ className, ...props }: React.ComponentProps<"p">) {
+  return (
+    <p
+      data-slot="item-description"
+      className={cn(
+        "line-clamp-2 text-sm leading-normal font-normal text-balance text-muted-foreground",
+        "[&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function ItemActions({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="item-actions"
+      className={cn("flex items-center gap-2", className)}
+      {...props}
+    />
+  );
+}
+
+function ItemHeader({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="item-header"
+      className={cn(
+        "flex basis-full items-center justify-between gap-2",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function ItemFooter({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="item-footer"
+      className={cn(
+        "flex basis-full items-center justify-between gap-2",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export {
+  Item,
+  ItemMedia,
+  ItemContent,
+  ItemActions,
+  ItemGroup,
+  ItemSeparator,
+  ItemTitle,
+  ItemDescription,
+  ItemHeader,
+  ItemFooter,
+};
+
+===== FIN: components/ui/item.tsx =====
+
+
+===== ARCHIVO: components/ui/kbd.tsx =====
+import { cn } from "@/lib/utils";
+
+function Kbd({ className, ...props }: React.ComponentProps<"kbd">) {
+  return (
+    <kbd
+      data-slot="kbd"
+      className={cn(
+        "pointer-events-none inline-flex h-5 w-fit min-w-5 items-center justify-center gap-1 rounded-sm bg-muted px-1 font-sans text-xs font-medium text-muted-foreground select-none",
+        "[&_svg:not([class*='size-'])]:size-3",
+        "[[data-slot=tooltip-content]_&]:bg-background/20 [[data-slot=tooltip-content]_&]:text-background dark:[[data-slot=tooltip-content]_&]:bg-background/10",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function KbdGroup({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <kbd
+      data-slot="kbd-group"
+      className={cn("inline-flex items-center gap-1", className)}
+      {...props}
+    />
+  );
+}
+
+export { Kbd, KbdGroup };
+
+===== FIN: components/ui/kbd.tsx =====
+
+
+===== ARCHIVO: components/ui/label.tsx =====
+"use client";
+
+import * as React from "react";
+import { Label as LabelPrimitive } from "radix-ui";
+
+import { cn } from "@/lib/utils";
+
+function Label({
+  className,
+  ...props
+}: React.ComponentProps<typeof LabelPrimitive.Root>) {
+  return (
+    <LabelPrimitive.Root
+      data-slot="label"
+      className={cn(
+        "flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export { Label };
+
+===== FIN: components/ui/label.tsx =====
+
+
+===== ARCHIVO: components/ui/marker.tsx =====
+import * as React from "react";
+import { cva, type VariantProps } from "class-variance-authority";
+import { Slot } from "radix-ui";
+
+import { cn } from "@/lib/utils";
+
+const markerVariants = cva(
+  "group/marker relative flex min-h-4 w-full items-center gap-2 text-left text-sm text-muted-foreground [&_svg:not([class*='size-'])]:size-4 [a]:underline [a]:underline-offset-3 [a]:hover:text-foreground",
+  {
+    variants: {
+      variant: {
+        default: "",
+        separator:
+          "before:mr-1 before:h-px before:min-w-0 before:flex-1 before:bg-border after:ml-1 after:h-px after:min-w-0 after:flex-1 after:bg-border",
+        border: "border-b border-border pb-2",
+      },
+    },
+  },
+);
+
+function Marker({
+  className,
+  variant = "default",
+  asChild = false,
+  ...props
+}: React.ComponentProps<"div"> &
+  VariantProps<typeof markerVariants> & {
+    asChild?: boolean;
+  }) {
+  const Comp = asChild ? Slot.Root : "div";
+
+  return (
+    <Comp
+      data-slot="marker"
+      data-variant={variant}
+      className={cn(markerVariants({ variant, className }))}
+      {...props}
+    />
+  );
+}
+
+function MarkerIcon({ className, ...props }: React.ComponentProps<"span">) {
+  return (
+    <span
+      data-slot="marker-icon"
+      aria-hidden="true"
+      className={cn(
+        "size-4 shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MarkerContent({ className, ...props }: React.ComponentProps<"span">) {
+  return (
+    <span
+      data-slot="marker-content"
+      className={cn(
+        "min-w-0 wrap-break-word group-data-[variant=separator]/marker:flex-none group-data-[variant=separator]/marker:text-center *:[a]:underline *:[a]:underline-offset-3 *:[a]:hover:text-foreground",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export { Marker, MarkerIcon, MarkerContent, markerVariants };
+
+===== FIN: components/ui/marker.tsx =====
+
+
+===== ARCHIVO: components/ui/menubar.tsx =====
+"use client";
+
+import * as React from "react";
+import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react";
+import { Menubar as MenubarPrimitive } from "radix-ui";
+
+import { cn } from "@/lib/utils";
+
+function Menubar({
+  className,
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.Root>) {
+  return (
+    <MenubarPrimitive.Root
+      data-slot="menubar"
+      className={cn(
+        "flex h-9 items-center gap-1 rounded-md border bg-background p-1 shadow-xs",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MenubarMenu({
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.Menu>) {
+  return <MenubarPrimitive.Menu data-slot="menubar-menu" {...props} />;
+}
+
+function MenubarGroup({
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.Group>) {
+  return <MenubarPrimitive.Group data-slot="menubar-group" {...props} />;
+}
+
+function MenubarPortal({
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.Portal>) {
+  return <MenubarPrimitive.Portal data-slot="menubar-portal" {...props} />;
+}
+
+function MenubarRadioGroup({
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.RadioGroup>) {
+  return (
+    <MenubarPrimitive.RadioGroup data-slot="menubar-radio-group" {...props} />
+  );
+}
+
+function MenubarTrigger({
+  className,
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.Trigger>) {
+  return (
+    <MenubarPrimitive.Trigger
+      data-slot="menubar-trigger"
+      className={cn(
+        "flex items-center rounded-sm px-2 py-1 text-sm font-medium outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MenubarContent({
+  className,
+  align = "start",
+  alignOffset = -4,
+  sideOffset = 8,
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.Content>) {
+  return (
+    <MenubarPortal>
+      <MenubarPrimitive.Content
+        data-slot="menubar-content"
+        align={align}
+        alignOffset={alignOffset}
+        sideOffset={sideOffset}
+        className={cn(
+          "z-50 min-w-[12rem] origin-(--radix-menubar-content-transform-origin) overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+          className,
+        )}
+        {...props}
+      />
+    </MenubarPortal>
+  );
+}
+
+function MenubarItem({
+  className,
+  inset,
+  variant = "default",
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.Item> & {
+  inset?: boolean;
+  variant?: "default" | "destructive";
+}) {
+  return (
+    <MenubarPrimitive.Item
+      data-slot="menubar-item"
+      data-inset={inset}
+      data-variant={variant}
+      className={cn(
+        "relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-8 data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground data-[variant=destructive]:*:[svg]:text-destructive!",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MenubarCheckboxItem({
+  className,
+  children,
+  checked,
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.CheckboxItem>) {
+  return (
+    <MenubarPrimitive.CheckboxItem
+      data-slot="menubar-checkbox-item"
+      className={cn(
+        "relative flex cursor-default items-center gap-2 rounded-xs py-1.5 pr-2 pl-8 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        className,
+      )}
+      checked={checked}
+      {...props}
+    >
+      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
+        <MenubarPrimitive.ItemIndicator>
+          <CheckIcon className="size-4" />
+        </MenubarPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </MenubarPrimitive.CheckboxItem>
+  );
+}
+
+function MenubarRadioItem({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.RadioItem>) {
+  return (
+    <MenubarPrimitive.RadioItem
+      data-slot="menubar-radio-item"
+      className={cn(
+        "relative flex cursor-default items-center gap-2 rounded-xs py-1.5 pr-2 pl-8 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        className,
+      )}
+      {...props}
+    >
+      <span className="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
+        <MenubarPrimitive.ItemIndicator>
+          <CircleIcon className="size-2 fill-current" />
+        </MenubarPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </MenubarPrimitive.RadioItem>
+  );
+}
+
+function MenubarLabel({
+  className,
+  inset,
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.Label> & {
+  inset?: boolean;
+}) {
+  return (
+    <MenubarPrimitive.Label
+      data-slot="menubar-label"
+      data-inset={inset}
+      className={cn(
+        "px-2 py-1.5 text-sm font-medium data-[inset]:pl-8",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MenubarSeparator({
+  className,
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.Separator>) {
+  return (
+    <MenubarPrimitive.Separator
+      data-slot="menubar-separator"
+      className={cn("-mx-1 my-1 h-px bg-border", className)}
+      {...props}
+    />
+  );
+}
+
+function MenubarShortcut({
+  className,
+  ...props
+}: React.ComponentProps<"span">) {
+  return (
+    <span
+      data-slot="menubar-shortcut"
+      className={cn(
+        "ml-auto text-xs tracking-widest text-muted-foreground",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MenubarSub({
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.Sub>) {
+  return <MenubarPrimitive.Sub data-slot="menubar-sub" {...props} />;
+}
+
+function MenubarSubTrigger({
+  className,
+  inset,
+  children,
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.SubTrigger> & {
+  inset?: boolean;
+}) {
+  return (
+    <MenubarPrimitive.SubTrigger
+      data-slot="menubar-sub-trigger"
+      data-inset={inset}
+      className={cn(
+        "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none select-none focus:bg-accent focus:text-accent-foreground data-[inset]:pl-8 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+      <ChevronRightIcon className="ml-auto h-4 w-4" />
+    </MenubarPrimitive.SubTrigger>
+  );
+}
+
+function MenubarSubContent({
+  className,
+  ...props
+}: React.ComponentProps<typeof MenubarPrimitive.SubContent>) {
+  return (
+    <MenubarPrimitive.SubContent
+      data-slot="menubar-sub-content"
+      className={cn(
+        "z-50 min-w-[8rem] origin-(--radix-menubar-content-transform-origin) overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export {
+  Menubar,
+  MenubarPortal,
+  MenubarMenu,
+  MenubarTrigger,
+  MenubarContent,
+  MenubarGroup,
+  MenubarSeparator,
+  MenubarLabel,
+  MenubarItem,
+  MenubarShortcut,
+  MenubarCheckboxItem,
+  MenubarRadioGroup,
+  MenubarRadioItem,
+  MenubarSub,
+  MenubarSubTrigger,
+  MenubarSubContent,
+};
+
+===== FIN: components/ui/menubar.tsx =====
+
+
+===== ARCHIVO: components/ui/message-scroller.tsx =====
+"use client";
+
+import * as React from "react";
+import {
+  MessageScroller as MessageScrollerPrimitive,
+  useMessageScroller,
+  useMessageScrollerScrollable,
+  useMessageScrollerVisibility,
+} from "@shadcn/react/message-scroller";
+import { ArrowDownIcon } from "lucide-react";
+
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+
+function MessageScrollerProvider(
+  props: React.ComponentProps<typeof MessageScrollerPrimitive.Provider>,
+) {
+  return <MessageScrollerPrimitive.Provider {...props} />;
+}
+
+function MessageScroller({
+  className,
+  ...props
+}: React.ComponentProps<typeof MessageScrollerPrimitive.Root>) {
+  return (
+    <MessageScrollerPrimitive.Root
+      data-slot="message-scroller"
+      className={cn(
+        "group/message-scroller relative flex size-full min-h-0 flex-col overflow-hidden",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MessageScrollerViewport({
+  className,
+  ...props
+}: React.ComponentProps<typeof MessageScrollerPrimitive.Viewport>) {
+  return (
+    <MessageScrollerPrimitive.Viewport
+      data-slot="message-scroller-viewport"
+      className={cn(
+        "size-full min-h-0 min-w-0 scroll-fade-b scrollbar-thin scrollbar-gutter-stable overflow-y-auto overscroll-contain contain-content data-autoscrolling:scrollbar-none",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MessageScrollerContent({
+  className,
+  ...props
+}: React.ComponentProps<typeof MessageScrollerPrimitive.Content>) {
+  return (
+    <MessageScrollerPrimitive.Content
+      data-slot="message-scroller-content"
+      className={cn("flex h-max min-h-full flex-col gap-8", className)}
+      {...props}
+    />
+  );
+}
+
+function MessageScrollerItem({
+  className,
+  scrollAnchor = false,
+  ...props
+}: React.ComponentProps<typeof MessageScrollerPrimitive.Item>) {
+  return (
+    <MessageScrollerPrimitive.Item
+      data-slot="message-scroller-item"
+      scrollAnchor={scrollAnchor}
+      className={cn(
+        "min-w-0 shrink-0 [contain-intrinsic-size:auto_10rem] [content-visibility:auto]",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MessageScrollerButton({
+  direction = "end",
+  className,
+  children,
+  render,
+  variant = "secondary",
+  size = "icon-sm",
+  ...props
+}: React.ComponentProps<typeof MessageScrollerPrimitive.Button> &
+  Pick<React.ComponentProps<typeof Button>, "variant" | "size">) {
+  return (
+    <MessageScrollerPrimitive.Button
+      data-slot="message-scroller-button"
+      data-direction={direction}
+      data-variant={variant}
+      data-size={size}
+      direction={direction}
+      className={cn(
+        "absolute inset-s-1/2 -translate-x-1/2 border-border bg-background text-foreground transition-[translate,scale,opacity] duration-200 hover:bg-muted hover:text-foreground data-[active=false]:pointer-events-none data-[active=false]:scale-95 data-[active=false]:opacity-0 data-[active=false]:duration-400 data-[active=false]:ease-[cubic-bezier(0.7,0,0.84,0)] data-[active=true]:translate-y-0 data-[active=true]:scale-100 data-[active=true]:opacity-100 data-[active=true]:ease-[cubic-bezier(0.23,1,0.32,1)] data-[direction=end]:bottom-4 data-[direction=end]:data-[active=false]:translate-y-full data-[direction=start]:top-4 data-[direction=start]:data-[active=false]:-translate-y-full rtl:translate-x-1/2 data-[direction=start]:[&_svg]:rotate-180",
+        className,
+      )}
+      render={render ?? <Button variant={variant} size={size} />}
+      {...props}
+    >
+      {children ?? (
+        <>
+          <ArrowDownIcon />
+          <span className="sr-only">
+            {direction === "end" ? "Scroll to end" : "Scroll to start"}
+          </span>
+        </>
+      )}
+    </MessageScrollerPrimitive.Button>
+  );
+}
+
+export {
+  MessageScrollerProvider,
+  MessageScroller,
+  MessageScrollerViewport,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerButton,
+  useMessageScroller,
+  useMessageScrollerScrollable,
+  useMessageScrollerVisibility,
+};
+
+===== FIN: components/ui/message-scroller.tsx =====
+
+
+===== ARCHIVO: components/ui/message.tsx =====
+import * as React from "react";
+
+import { cn } from "@/lib/utils";
+
+function MessageGroup({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="message-group"
+      className={cn("flex min-w-0 flex-col gap-2", className)}
+      {...props}
+    />
+  );
+}
+
+function Message({
+  className,
+  align = "start",
+  ...props
+}: React.ComponentProps<"div"> & { align?: "start" | "end" }) {
+  return (
+    <div
+      data-slot="message"
+      data-align={align}
+      className={cn(
+        "group/message relative flex w-full min-w-0 gap-2 text-sm data-[align=end]:flex-row-reverse",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MessageAvatar({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="message-avatar"
+      className={cn(
+        "flex w-fit min-w-8 shrink-0 items-center justify-center self-end overflow-hidden rounded-full bg-muted group-has-data-[slot=message-footer]/message:-translate-y-8",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MessageContent({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="message-content"
+      className={cn(
+        "flex w-full min-w-0 flex-col gap-2.5 wrap-break-word group-data-[align=end]/message:*:data-slot:self-end",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MessageHeader({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="message-header"
+      className={cn(
+        "flex max-w-full min-w-0 items-center px-3 text-xs font-medium text-muted-foreground group-has-data-[variant=ghost]/message:px-0",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function MessageFooter({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="message-footer"
+      className={cn(
+        "flex max-w-full min-w-0 items-center px-3 text-xs font-medium text-muted-foreground group-has-data-[variant=ghost]/message:px-0 group-data-[align=end]/message:justify-end",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export {
+  MessageGroup,
+  Message,
+  MessageAvatar,
+  MessageContent,
+  MessageFooter,
+  MessageHeader,
+};
+
+===== FIN: components/ui/message.tsx =====
+
+
+===== ARCHIVO: components/ui/native-select.tsx =====
+import * as React from "react";
+import { ChevronDownIcon } from "lucide-react";
+
+import { cn } from "@/lib/utils";
+
+function NativeSelect({
+  className,
+  size = "default",
+  ...props
+}: Omit<React.ComponentProps<"select">, "size"> & { size?: "sm" | "default" }) {
+  return (
+    <div
+      className="group/native-select relative w-fit has-[select:disabled]:opacity-50"
+      data-slot="native-select-wrapper"
+    >
+      <select
+        data-slot="native-select"
+        data-size={size}
+        className={cn(
+          "h-9 w-full min-w-0 appearance-none rounded-md border border-input bg-transparent px-3 py-2 pr-9 text-sm shadow-xs transition-[color,box-shadow] outline-none selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground disabled:pointer-events-none disabled:cursor-not-allowed data-[size=sm]:h-8 data-[size=sm]:py-1 dark:bg-input/30 dark:hover:bg-input/50",
+          "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+          "aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40",
+          className,
+        )}
+        {...props}
+      />
+      <ChevronDownIcon
+        className="pointer-events-none absolute top-1/2 right-3.5 size-4 -translate-y-1/2 text-muted-foreground opacity-50 select-none"
+        aria-hidden="true"
+        data-slot="native-select-icon"
+      />
+    </div>
+  );
+}
+
+function NativeSelectOption({
+  className,
+  ...props
+}: React.ComponentProps<"option">) {
+  return (
+    <option
+      data-slot="native-select-option"
+      className={cn("bg-[Canvas] text-[CanvasText]", className)}
+      {...props}
+    />
+  );
+}
+
+function NativeSelectOptGroup({
+  className,
+  ...props
+}: React.ComponentProps<"opt

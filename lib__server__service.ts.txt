@@ -1,0 +1,290 @@
+ARCHIVO ORIGINAL: lib/server/service.ts
+
+import { AppError, digest, normalizePhone } from "../domain.ts";
+import {
+  createProvider,
+  participants,
+  type Provider,
+  type ProviderConfig,
+} from "./providers.ts";
+import { Store, type SessionRow, type QueryRow } from "./store.ts";
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const TIMEOUT = 12000;
+export class Service {
+  store: Store;
+  config: ProviderConfig;
+  provider: Provider;
+  timeout: number;
+  constructor(
+    store: Store,
+    config: ProviderConfig,
+    provider?: Provider,
+    timeout = TIMEOUT,
+  ) {
+    this.store = store;
+    this.config = config;
+    this.provider = provider ?? createProvider(config, store);
+    this.timeout = timeout;
+  }
+  async rate(userId: string, kind: string, max: number, period = 3600000) {
+    const now = Date.now(),
+      window = Math.floor(now / period),
+      key = `${kind}:${userId}:${window}`;
+    const row = await this.store.one<{ count: number }>(
+      "INSERT INTO limits (id,count,expires) VALUES (?,1,?) ON CONFLICT(id) DO UPDATE SET count=count+1 RETURNING count",
+      key,
+      (window + 1) * period,
+    );
+    if (!row || row.count > max)
+      throw new AppError(
+        "RATE_LIMIT",
+        "Límite alcanzado. Espera antes de continuar.",
+        429,
+      );
+  }
+  async cleanup() {
+    const now = Date.now();
+    await this.store.run(
+      "DELETE FROM queries WHERE created < ? OR session_id IN (SELECT id FROM sessions WHERE expires < ?)",
+      now - 7200000,
+      now,
+    );
+    await this.store.run("DELETE FROM sessions WHERE expires < ?", now);
+    await this.store.run("DELETE FROM limits WHERE expires < ?", now);
+  }
+  async start(userId: string, body: Record<string, unknown>) {
+    await this.rate(userId, "sessions", 5);
+    await this.cleanup();
+    const allowed = participants(this.config, userId);
+    if (
+      !Array.isArray(body.participantIds) ||
+      !body.participantIds.length ||
+      body.participantIds.length > 10 ||
+      body.participantIds.some(
+        (id) => typeof id !== "string" || !allowed.some((p) => p.id === id),
+      )
+    )
+      throw new AppError(
+        "UNAUTHORIZED_PARTICIPANT",
+        "Selecciona participantes autorizados para esta sesión.",
+        403,
+      );
+    await this.erase(userId);
+    const id = crypto.randomUUID(),
+      csrf = crypto.randomUUID(),
+      salt = crypto.randomUUID(),
+      now = Date.now();
+    await this.store.run(
+      "INSERT INTO sessions (id,user_id,csrf,salt,mode,participants,created,expires) VALUES (?,?,?,?,?,?,?,?)",
+      id,
+      userId,
+      await digest(csrf),
+      salt,
+      this.provider.mode,
+      JSON.stringify([...new Set(body.participantIds)]),
+      now,
+      now + 7200000,
+    );
+    return { id, csrf, mode: this.provider.mode, expires: now + 7200000 };
+  }
+  async erase(userId: string) {
+    // Revoke first: an in-flight provider cannot return a result after deletion.
+    await this.store.run(
+      "UPDATE sessions SET revoked=1 WHERE user_id=?",
+      userId,
+    );
+    await this.store.run(
+      "DELETE FROM queries WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)",
+      userId,
+    );
+    await this.store.run("DELETE FROM sessions WHERE user_id=?", userId);
+  }
+  async session(userId: string, id: unknown, csrf: string | null) {
+    if (typeof id !== "string" || !UUID.test(id))
+      throw new AppError("SESSION", "Sesión no válida.", 403);
+    const row = await this.store.one<SessionRow>(
+      "SELECT * FROM sessions WHERE id=? AND user_id=?",
+      id,
+      userId,
+    );
+    if (
+      !row ||
+      row.revoked ||
+      row.expires < Date.now() ||
+      row.mode !== this.provider.mode
+    )
+      throw new AppError("SESSION", "Sesión caducada. Prepara una nueva.", 403);
+    if (!csrf || (await digest(csrf)) !== row.csrf)
+      throw new AppError("CSRF", "Verificación de sesión no válida.", 403);
+    return row;
+  }
+  async query(
+    userId: string,
+    body: Record<string, unknown>,
+    csrf: string | null,
+  ) {
+    const s = await this.session(userId, body.sessionId, csrf);
+    if (
+      typeof body.requestId !== "string" ||
+      !UUID.test(body.requestId) ||
+      typeof body.noteId !== "string" ||
+      !UUID.test(body.noteId) ||
+      typeof body.text !== "string" ||
+      body.text.length > 20000 ||
+      typeof body.revision !== "string" ||
+      !/^[a-f0-9]{64}$/.test(body.revision)
+    )
+      throw new AppError("INPUT", "Petición no válida.");
+    if ((await digest(body.text)) !== body.revision)
+      throw new AppError("REVISION", "La revisión no coincide con el texto.");
+    const phone = normalizePhone(body.text);
+    const selected = JSON.parse(s.participants) as string[];
+    if (
+      !participants(this.config, userId).some(
+        (p) => p.phone === phone && selected.includes(p.id),
+      )
+    )
+      throw new AppError(
+        "UNAUTHORIZED_PHONE",
+        "Este número no está autorizado para esta sesión.",
+        403,
+      );
+    const phoneHash = await digest(s.salt + phone);
+    const duplicate = await this.store.one<QueryRow>(
+      "SELECT * FROM queries WHERE id=?",
+      body.requestId,
+    );
+    if (duplicate)
+      throw new AppError(
+        "DUPLICATE",
+        "La petición ya se recibió; no se repetirá automáticamente.",
+        409,
+      );
+    await this.rate(userId, "query", 20);
+    await this.rate(s.id, "query-session", 5, 60000);
+    const now = Date.now();
+    const lock = await this.store.one<{ id: string }>(
+      "UPDATE sessions SET active_query=?,lease=?,query_count=query_count+1 WHERE id=? AND revoked=0 AND expires>? AND query_count<10 AND (active_query IS NULL OR lease<?) RETURNING id",
+      body.requestId,
+      now + this.timeout + 3000,
+      s.id,
+      now,
+      now,
+    );
+    if (!lock)
+      throw new AppError(
+        "BUSY_OR_LIMIT",
+        "Hay una consulta pendiente o se agotó el límite de sesión.",
+        409,
+      );
+    try {
+      await this.store.run(
+        "INSERT INTO queries (id,session_id,note_id,revision,phone_hash,status,created) VALUES (?,?,?,?,?,?,?)",
+        body.requestId,
+        s.id,
+        body.noteId,
+        body.revision,
+        phoneHash,
+        "consultando",
+        now,
+      );
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeout);
+      let result;
+      try {
+        result = await Promise.race([
+          this.provider.lookup({
+            requestId: body.requestId,
+            phone,
+            sessionId: s.id,
+            signal: controller.signal,
+          }),
+          new Promise<never>((_, reject) => {
+            controller.signal.addEventListener(
+              "abort",
+              () =>
+                reject(
+                  new AppError(
+                    "TIMEOUT",
+                    "Tiempo de espera agotado. La consulta no se reintenta.",
+                    504,
+                  ),
+                ),
+              { once: true },
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+        controller.abort();
+      }
+      const active = await this.store.one<SessionRow>(
+        "SELECT * FROM sessions WHERE id=? AND user_id=?",
+        s.id,
+        userId,
+      );
+      if (
+        !active ||
+        active.revoked ||
+        active.expires < Date.now() ||
+        active.active_query !== body.requestId
+      )
+        throw new AppError(
+          "STALE_SESSION",
+          "La sesión cambió durante la consulta.",
+          409,
+        );
+      const status = result.found ? "completado" : "sin resultado";
+      const providerMs = Date.now() - now;
+      await this.store.run(
+        "UPDATE queries SET status=?,provider_ms=? WHERE id=?",
+        status,
+        providerMs,
+        body.requestId,
+      );
+      return {
+        requestId: body.requestId,
+        sessionId: s.id,
+        noteId: body.noteId,
+        revision: body.revision,
+        phone,
+        status,
+        result: result.found ? result : null,
+        providerMs,
+      };
+    } catch (error) {
+      const e =
+        error instanceof AppError
+          ? error
+          : new AppError(
+              "NETWORK",
+              "No se pudo contactar con el proveedor.",
+              502,
+            );
+      await this.store.run(
+        "UPDATE queries SET status=?,code=?,provider_ms=? WHERE id=?",
+        e.code === "TIMEOUT" ? "tiempo agotado" : "error",
+        e.code,
+        Date.now() - now,
+        body.requestId,
+      );
+      throw e;
+    } finally {
+      await this.store.run(
+        "UPDATE sessions SET active_query=NULL,lease=0 WHERE id=? AND active_query=?",
+        s.id,
+        body.requestId,
+      );
+    }
+  }
+  async diagnostics(userId: string, id: string, csrf: string | null) {
+    await this.session(userId, id, csrf);
+    return this.store.rows<
+      Pick<QueryRow, "id" | "status" | "code" | "created" | "provider_ms">
+    >(
+      "SELECT id,status,code,created,provider_ms FROM queries WHERE session_id=? ORDER BY created DESC LIMIT 10",
+      id,
+    );
+  }
+}

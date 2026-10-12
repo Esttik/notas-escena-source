@@ -1,0 +1,678 @@
+bot/conversación antes del envío, bloqueo global D1 por bot, cursor, reply exacto, número y marcador final confirmado; no se responde al proveedor ni se reintenta el envío. Detalles en [TELEGRAM.md](TELEGRAM.md).
+- Alternativa solicitada el 12/10/2026: cliente de usuario en proceso Node independiente. Sesión nueva con consentimiento de delegación explícito, API ID/hash del titular, sesión AES-256-GCM, directorio 700/archivo 600, códigos y 2FA no persistidos. Solo admite el teléfono de getMe; no lee otros chats por su lógica. Una sesión MTProto tiene acceso técnico amplio a la cuenta y se revoca en Telegram → Dispositivos, no al borrar una actuación. Bearer solo entre servidores, URL HTTPS, sin CORS, registro durable sin resultados ni teléfonos en claro, límites y RPC sin reintentos. Los riesgos y la separación de hosting se documentan en [bridge/README.md](../bridge/README.md). Está vinculado y activo para el teléfono propio autorizado; el proveedor HTTP actual se ejecuta en Netlify Functions con registro transaccional Postgres compartido, y se comprobó con los procesos del Mac apagados. Sesión y credenciales son secretos de Functions únicamente en production; previews mantienen login de equipo.
+- Respuesta renderizada como texto literal dentro del editor. Sin HTML recibido, eval, instrucciones del bot ni enlaces accionables generados por él. Los campos ausentes se omiten. No se presenta la ficha como identidad verificada.
+
+## Datos y retención
+
+| Dato                                                                       | Dónde                                                          | Retención/borrado                                          |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------------------------- |
+| Notas ordinarias                                                           | localStorage del dispositivo                                   | Hasta eliminar la nota o los datos del sitio               |
+| Notas de actuación y resultados                                            | Memoria de la página                                           | Hasta borrar sesión, reiniciar, caducar, recargar o cerrar |
+| Sesión, lista de IDs autorizados, CSRF hash y sal                          | D1 servidor                                                    | Borrado explícito o purga por actividad al caducar         |
+| Petición: UUID, nota, revisión, hash salado del teléfono, estado y tiempos | D1 servidor                                                    | Borrado junto a sesión; sin nombres ni respuesta           |
+| Registro de consentimiento real                                            | Variable secreta del servidor + evidencia externa del operador | Gestionado según vigencia y política del operador          |
+| Datos transmitidos al proveedor                                            | Servicio autorizado/Telegram si el puente lo usa               | Según su política; borrar la app no los elimina            |
+
+No se guarda el texto de la nota en D1. El número se usa en memoria para llamar al proveedor; en metadatos se conserva solo un hash con sal de sesión. El registro real del servidor contiene los teléfonos autorizados y requiere gestión confidencial. La sal no se envía al cliente.
+
+El historial de edición reside solo en memoria, acotado a 50 estados/200.000 caracteres. El peek temporal nunca entra en contenteditable, en el historial, en el texto de Compartir ni en el guardado. Se renderiza como texto seguro en un elemento separado mientras el gesto está activo, y se elimina del DOM al soltar/cancelar, perder foco de ventana o suspender la página. La respuesta reservada queda solo en memoria hasta editar, cambiar contexto, deshacer/descartar o borrar sesión.
+
+El resultado no se persiste siquiera en el servidor: un duplicado devuelve un conflicto, no una copia de la respuesta. La PWA solo guarda recursos públicos estáticos; no hay analítica. Abrir una nota ordinaria durante actuación crea una copia temporal: no convierte ni sobrescribe el original. Compartir una nota es una acción explícita del usuario que puede transmitir su texto mediante el menú nativo.
+
+La purga automática de metadatos es oportunista al preparar sesiones: si no hay actividad, los metadatos vencidos pueden permanecer en D1 hasta el próximo uso. No contienen resultados ni teléfonos en claro. Borrar sesión ejecuta revocación y borrado inmediato en la base activa; copias de seguridad del hosting se rigen por su política. No se promete borrado retroactivo de Telegram, dispositivos receptores, backups o proveedores.
+
+No hay endpoint webhook de Telegram en esta aplicación. Para un puente externo están documentadas las verificaciones que debe implementar su operador; no se afirma que existan sin haberlo probado.
+
+La tabla `telegram_state` conserva cursor y tiempos de transporte independientes de los resultados y de las sesiones. No contiene token, teléfono, nombre ni mensajes. Se mantiene al borrar una sesión para deduplicar respuestas antiguas y conserva el bloqueo/cooldown global del bot. Borrar en la aplicación no elimina mensajes en Telegram. Los nuevos ensayos del transporte utilizan respuestas HTTP simuladas y datos ficticios.
+
+## Instalación fuera de Sites
+
+Las cabeceras `oai-authenticated-user-*` son de confianza únicamente detrás del gateway autenticado de Sites, que las inyecta. Nunca expongas la app detrás de un proxy que permita falsificarlas. Para otro hosting hay que sustituir este límite por autenticación real, cookies firmadas con Secure/HttpOnly/SameSite y control de propiedad equivalente. El preview local no vale para producción.
+
+## Verificación realizada
+
+Se aplicaron parches a React/RSC, imágenes y herramientas. La auditoría de dependencias de producción no detecta avisos conocidos; la auditoría completa conserva 12 entradas en cadenas de construcción/desarrollo sin solución compatible aplicada. El detalle y las mitigaciones están en [PRUEBAS.md](PRUEBAS.md). No se declara una auditoría completa sin incidencias.
+
+Pruebas con dos identidades de servidor bloquean la sesión de otro artista; CSRF falso, números ajenos y revisiones falseadas no llegan al proveedor. Pruebas de navegador verifican el contenido malicioso literal y ausencia de resultados en la clave ordinaria. Revisión del bundle cliente para nombres de secretos. Las cookies del gateway y el iPhone físico requieren comprobación en el entorno publicado/dispositivo; no se atribuyen esas pruebas al simulador.
+
+===== FIN: docs/SEGURIDAD.md =====
+
+
+===== ARCHIVO: docs/TELEGRAM.md =====
+# Bot propio → @TrueCalleRobot
+
+## Estado verificable
+
+El transporte directo está implementado en `lib/server/telegram.ts`. Se ha probado con respuestas HTTP simuladas de Telegram y datos ficticios, incluyendo el servicio de sesión completo. Se ha creado @YOUR_OWN_BOT, habilitado su modo bot-to-bot, guardado el token como secreto de servidor y confirmado el ID del destino. La prueba real de `/start` fue rechazada por Telegram con 400 de comunicación entre bots. Falta aceptación del canal, permiso y protocolo del operador. [Acta de comprobaciones reales](ACTIVACION-TELEGRAM.md). **Ese transporte entre bots no está activado.** La conexión real posterior utiliza una sesión nueva del titular mediante el puente HTTP de cliente de usuario; véanse bridge/README.md y el acta.
+
+La [documentación oficial](https://core.telegram.org/bots/features#bot-to-bot-communication) permite mensajes privados si ambos bots habilitan Bot-to-Bot Communication Mode. En grupos existen condiciones distintas; este adaptador implementa únicamente el canal privado. La compatibilidad de Telegram no demuestra que el servicio destinatario acepte consultas, ni autoriza el tratamiento de sus datos.
+
+## Crear y preparar el bot
+
+1. Usa el [@BotFather oficial](https://t.me/BotFather) con tu cuenta de Telegram. Envía `/newbot`, elige nombre y un usuario libre terminado en `bot`. En este proyecto ya existe **Notas Escena**, usuario **NotasEscenaEsttikBot**; no lo recrees. Si el asistente lo hace desde tu cuenta, necesita tu autorización expresa para enviar esos mensajes y crear el bot.
+2. Activa **Bot-to-Bot Communication Mode** en los ajustes de ese bot en BotFather. No puede activarse el mismo ajuste de @TrueCalleRobot desde nuestra cuenta: debe tenerlo habilitado su operador.
+3. Dedica el bot exclusivamente a este proyecto y usa su token solo en variables del servidor. No compartas el token en el chat ni lo introduzcas en el navegador de la app. No reutilices un bot con webhook u otro programa que consuma sus actualizaciones. El adaptador detecta un webhook y falla sin borrarlo ni modificarlo.
+4. Obtén del operador el ID numérico estable de @TrueCalleRobot, el permiso de consulta y el protocolo de respuesta. Si exige un saludo inicial `/start`, debe prepararse con el bot propio según sus instrucciones; el adaptador no envía comandos de alta, acepta condiciones ni se suscribe a canales automáticamente.
+5. Confirma que cada respuesta es un **reply al mensaje que contiene el número** y que incluye `Number: +34…`. Define cómo distingue resultados finales, parciales y sin resultado. Si solo entrega mensajes sueltos sin correlación o no tiene un criterio final verificable, no habilites este adaptador.
+6. Da de alta únicamente a titulares previamente verificados y con consentimiento vigente para este proveedor. La ficha se trata como información del proveedor, nunca como identidad acreditada.
+
+El canal que anuncia el bot publica [@OTPless como contacto](https://t.me/s/true_caller). Se le ha enviado la solicitud de compatibilidad con autorización del usuario. Su perfil indica soporte para @true_caller; no se ha acreditado afiliación con Truecaller.
+
+## Variables de servidor
+
+Mantén `PROVIDER_MODE=demo` hasta completar las comprobaciones. Para activar el transporte privado:
+
+```dotenv
+PROVIDER_MODE=real
+PROVIDER_TRANSPORT=telegram
+PROVIDER_AUTHORIZED=true
+TELEGRAM_BOT_TOKEN=<token del bot propio>
+TELEGRAM_TARGET_USERNAME=TrueCalleRobot
+TELEGRAM_TARGET_BOT_ID=<ID numérico confirmado>
+TELEGRAM_PROTOCOL_CONFIRMED=true
+TELEGRAM_FINAL_SUFFIX=<última línea literal del resultado final confirmada>
+TELEGRAM_NO_RESULT_TEXT=<última línea literal de sin resultado confirmada, opcional>
+AUTHORIZED_PARTICIPANTS_JSON=<registro confidencial de titulares autorizados>
+```
+
+`PROVIDER_AUTHORIZED` y `TELEGRAM_PROTOCOL_CONFIRMED` son condiciones de activación gestionadas por el operador del servidor, no mecanismos que obtengan permiso por sí mismos. No copies el marcador ficticio de las pruebas (`END OF RESULT`) como si fuese el formato del bot real. No se ha supuesto ningún marcador real de la captura. Cada alta del registro debe tener `provider` igual a `telegram:@TrueCalleRobot:<ID numérico confirmado>` y el artista/alcance/fechas/evidencia descritos en [PROVEEDOR.md](PROVEEDOR.md).
+
+En Sites configura estas variables con sus herramientas de servidor y publica una versión que las aplique. En desarrollo se usa `.dev.vars` ignorado. `.env.example` no contiene valores secretos. Un modo real incompleto falla y no se transforma en demo.
+
+## Protocolo y ejecución
+
+Antes de enviar un teléfono se verifica `getMe`, ausencia de webhook con `getWebhookInfo` y que `getChat` del username configurado devuelva el ID privado estable esperado. **Comprobar conexión del bot** en el área del artista realiza solo esas lecturas: no envía teléfonos y no certifica bot-to-bot ni la respuesta del servicio. Si Telegram no permite `getChat` para ese destino todavía, la preparación está incompleta y se falla antes de enviar datos.
+
+Solo después de la autorización del titular/sesión se llama una vez a [`sendMessage`](https://core.telegram.org/bots/api#sendmessage) con el número normalizado y el ID privado fijo, verificando también el ID de la respuesta. Así un cambio de propietario del username no cambia el destinatario de los datos. Ese envío por ID debe comprobarse con el servicio antes de activar; el saludo de diagnóstico se realizó por username, sin teléfonos, y fue rechazado. Se recibe mediante [`getUpdates`](https://core.telegram.org/bots/api#getupdates), exclusivamente mientras dura esa consulta HTTP. No hay webhook público, apertura de Telegram, portapapeles durante actuación ni proceso continuo cuando la PWA se suspende.
+
+Una fila D1 por bot controla turno global, cursor de actualización y espera por límites. El turno es atómico, abarca distintas sesiones/artistas y permanece estable al rotar el token. Una segunda consulta recibe conflicto sin enviar; no se acumula una cola de números. Máximo ocho lecturas por consulta, long polling de dos segundos y pausa de 300 ms entre lotes; el servicio impone un máximo de 12 segundos y aborta la lectura. No se reintenta un envío fallido: Telegram no admite nuestra clave de idempotencia en `sendMessage`.
+
+Solo se acepta `message` cuyo `from.id` sea el bot esperado y `is_bot=true`, conversación privada fija, `reply_to_message.message_id` igual al mensaje enviado y `Number` coincidente. Las actualizaciones repetidas y respuestas antiguas se descartan con el cursor/correlación. Un mensaje sin el marcador final sigue pendiente; una respuesta con número distinto o campos duplicados se rechaza. No se responde al bot automáticamente, evitando bucles.
+
+Parser de texto: etiquetas literales `Number`, `Country`, `Carrier`, `Name`; campos opcionales y acotados. El marcador final debe ser la última línea literal no vacía. El estado sin resultado requiere igualmente `Number` y el marcador de ausencia configurado. No se aceptan formatos inferidos, mensajes editados posteriores, respuestas distribuidas en varios fragmentos sin un mensaje final completo ni resultados basados en «el último mensaje». Si el operador tiene otro protocolo, hay que adaptar y volver a probar el parser.
+
+## Privacidad y limitaciones
+
+No se persisten textos ni resultados Telegram. La tabla de transporte guarda solo un identificador derivado del ID del bot propio, cursor, UUID de petición temporal y tiempos; no contiene token, número, nombre o respuesta. Es metadato técnico independiente de las sesiones y permanece tras borrarlas para descartar actualizaciones antiguas. El resultado vive en memoria y está vinculado a la sesión, nota, número y revisión existentes.
+
+Las respuestas JSON de Telegram se limitan a 128 KiB por lote; el mensaje aceptado a 8 KiB y los campos a 200 caracteres. Los errores externos no revelan descripciones crudas, URLs que incluyen el token, nombres o teléfonos. Un 429 conserva `retry_after` en D1; los conflictos de consumidor y configuración se muestran con códigos seguros. No actives registro de URLs salientes: el token forma parte del endpoint exigido por Telegram.
+
+Borrar sesión en la app no borra mensajes que conserven Telegram o el servicio de destino. No hay eliminación remota automática; la retención externa debe acordarse antes de utilizar datos personales.
+
+## Acta necesaria para activar
+
+Con un titular autorizado y configuración del operador: comprobar capacidad bot-to-bot efectiva, envío único de +34, ID de origen/conversación, reply y marcador final reales, campos disponibles, latencia/timeout, duplicados/parciales/tardíos, borrado y límites. El informe actual acredita el transporte con respuestas simuladas, no esa acta.
+
+===== FIN: docs/TELEGRAM.md =====
+
+
+===== ARCHIVO: docs/auditoria-20261012/ALCANCE.md =====
+# Documento de comprobación local
+
+El informe histórico de la instalación privada se omite en esta copia pública. El código y las pruebas reproducibles están incluidos. No se publican identificadores, resultados, permisos de cuenta ni evidencias de producción.
+
+===== FIN: docs/auditoria-20261012/ALCANCE.md =====
+
+
+===== ARCHIVO: docs/auditoria-20261012/INFORME.md =====
+# Documento de comprobación local
+
+El informe histórico de la instalación privada se omite en esta copia pública. El código y las pruebas reproducibles están incluidos. No se publican identificadores, resultados, permisos de cuenta ni evidencias de producción.
+
+===== FIN: docs/auditoria-20261012/INFORME.md =====
+
+
+===== ARCHIVO: drizzle/0000_bouncy_scalphunter.sql =====
+CREATE TABLE `limits` (
+	`id` text PRIMARY KEY NOT NULL,
+	`count` integer NOT NULL,
+	`expires` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE `queries` (
+	`id` text PRIMARY KEY NOT NULL,
+	`session_id` text NOT NULL,
+	`note_id` text NOT NULL,
+	`revision` text NOT NULL,
+	`phone_hash` text NOT NULL,
+	`status` text NOT NULL,
+	`code` text,
+	`created` integer NOT NULL,
+	`provider_ms` integer
+);
+--> statement-breakpoint
+CREATE INDEX `query_session` ON `queries` (`session_id`);--> statement-breakpoint
+CREATE TABLE `sessions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`user_id` text NOT NULL,
+	`csrf` text NOT NULL,
+	`salt` text NOT NULL,
+	`mode` text NOT NULL,
+	`participants` text NOT NULL,
+	`created` integer NOT NULL,
+	`expires` integer NOT NULL,
+	`revoked` integer DEFAULT 0 NOT NULL,
+	`query_count` integer DEFAULT 0 NOT NULL,
+	`active_query` text,
+	`lease` integer DEFAULT 0 NOT NULL,
+	CONSTRAINT "participant_size" CHECK(length("sessions"."participants") <= 4096)
+);
+--> statement-breakpoint
+CREATE INDEX `session_user` ON `sessions` (`user_id`);
+===== FIN: drizzle/0000_bouncy_scalphunter.sql =====
+
+
+===== ARCHIVO: drizzle/0001_robust_thunderball.sql =====
+CREATE TABLE `telegram_state` (
+	`id` text PRIMARY KEY NOT NULL,
+	`cursor` integer DEFAULT 0 NOT NULL,
+	`lease` integer DEFAULT 0 NOT NULL,
+	`request_id` text,
+	`cooldown_until` integer DEFAULT 0 NOT NULL
+);
+
+===== FIN: drizzle/0001_robust_thunderball.sql =====
+
+
+===== ARCHIVO: drizzle/meta/0000_snapshot.json =====
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "101cae86-c12e-4aa0-a5b8-7b1a1417e692",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "tables": {
+    "limits": {
+      "name": "limits",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "count": {
+          "name": "count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires": {
+          "name": "expires",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "queries": {
+      "name": "queries",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "note_id": {
+          "name": "note_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "phone_hash": {
+          "name": "phone_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created": {
+          "name": "created",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider_ms": {
+          "name": "provider_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "query_session": {
+          "name": "query_session",
+          "columns": [
+            "session_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "sessions": {
+      "name": "sessions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "csrf": {
+          "name": "csrf",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "salt": {
+          "name": "salt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mode": {
+          "name": "mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "participants": {
+          "name": "participants",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created": {
+          "name": "created",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires": {
+          "name": "expires",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revoked": {
+          "name": "revoked",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "query_count": {
+          "name": "query_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "active_query": {
+          "name": "active_query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "lease": {
+          "name": "lease",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "session_user": {
+          "name": "session_user",
+          "columns": [
+            "user_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "participant_size": {
+          "name": "participant_size",
+          "value": "length(\"sessions\".\"participants\") <= 4096"
+        }
+      }
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}
+===== FIN: drizzle/meta/0000_snapshot.json =====
+
+
+===== ARCHIVO: drizzle/meta/0001_snapshot.json =====
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "2195dedc-bed7-4cb6-881b-85c80347bbee",
+  "prevId": "101cae86-c12e-4aa0-a5b8-7b1a1417e692",
+  "tables": {
+    "limits": {
+      "name": "limits",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "count": {
+          "name": "count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires": {
+          "name": "expires",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "queries": {
+      "name": "queries",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "note_id": {
+          "name": "note_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revision": {
+          "name": "revision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "phone_hash": {
+          "name": "phone_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created": {
+          "name": "created",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider_ms": {
+          "name": "provider_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "query_session": {
+          "name": "query_session",
+          "columns": [
+            "session_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "sessions": {
+      "name": "sessions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "csrf": {
+          "name": "csrf",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "salt": {
+          "name": "salt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mode": {
+          "name": "mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "participants": {
+          "name": "participants",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created": {
+          "name": "created",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires": {
+          "name": "expires",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revoked": {
+          "name": "revoked",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "query_count": {
+          "name": "query_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "active_query": {
+          "name": "active_query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "lease": {
+          "name": "lease",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "session_user": {
+          "name": "session_user",
+          "columns": [
+            "user_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "participant_size": {
+          "name": "participant_size",
+          "value": "length(\"sessions\".\"participants\") <= 4096"
+        }
+      }
+    },
+    "telegram_state": {
+      "name": "telegram_state",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cursor": {
+          "name": "cursor",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "lease": {
+          "name": "lease",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "request_id": {
+          "name": "request_id",
+        

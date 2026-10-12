@@ -1,0 +1,898 @@
+candidates; expand with live DOM and transition tests. The skill public/index.html inventory is incompatible with this SSR project. No credentials, DB records or personal content collected.",
+    },
+    null,
+    2,
+  ),
+);
+console.log(
+  JSON.stringify({
+    commit,
+    sourceFiles: files.length,
+    staticCandidates: actions.length,
+    output: out,
+  }),
+);
+
+===== FIN: scripts/audit-inventory.mjs =====
+
+
+===== ARCHIVO: scripts/build-verified.sh =====
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "${SITES_ENV_READY:-}" != "1" ]]; then
+  exec "${script_dir}/sites-env.sh" -- "$0" "$@"
+fi
+
+command -v timeout || {
+  echo "build-verified.sh requires GNU timeout." >&2
+  exit 69
+}
+
+vinext="${SITES_PROJECT_ROOT}/node_modules/.bin/vinext"
+if [[ ! -x "${vinext}" ]]; then
+  echo "vinext is unavailable. Run npm run install:ci and wait for it to finish before building." >&2
+  exit 69
+fi
+
+echo "Running bounded vinext build..."
+timeout \
+  --signal=TERM \
+  --kill-after="${SITES_BUILD_KILL_AFTER:-10s}" \
+  "${SITES_BUILD_TIMEOUT:-3m}" \
+  "${vinext}" build
+
+===== FIN: scripts/build-verified.sh =====
+
+
+===== ARCHIVO: scripts/connector-preview/connector-preview-session.mjs =====
+import { randomUUID } from "node:crypto";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import path from "node:path";
+import { createInterface } from "node:readline";
+import { parseArgs } from "node:util";
+import { JSONRPCClient } from "json-rpc-2.0";
+import { createPreviewBinding } from "./host-binding.mjs";
+import {
+  driverMessageSchema,
+  grantsSchema,
+  sessionOptionsSchema,
+} from "./protocol.mjs";
+
+// The agent starts this script through its terminal tool after creating a local
+// Site and selecting connector read actions, following references/app-integrations.md#local-preview:
+//   node <site-directory>/scripts/connector-preview/connector-preview-session.mjs <site-directory> <grants.json>
+// During the agent development loop, the Site preview writes requests into a shared folder.
+// This script checks each request with host-binding.mjs, then asks the agent over
+// stdout to call the connector. The agent returns the tool result through stdin,
+// and this script writes it back for the Site. The agent stops the script when
+// previewing ends; neither the browser nor a deployed Site starts this process.
+const { positionals, values } = parseArgs({
+  allowPositionals: true,
+  options: {
+    concurrency: { type: "string" },
+    "timeout-ms": { type: "string" },
+    "lifetime-ms": { type: "string" },
+    "max-calls": { type: "string" },
+  },
+});
+const [project, grantsFile] = positionals;
+if (positionals.length !== 2 || !path.isAbsolute(project)) {
+  throw new Error(
+    "Usage: node connector-preview-session.mjs <absolute-site-directory> <grants.json> [--concurrency 64] [--timeout-ms 120000] [--lifetime-ms N] [--max-calls N]",
+  );
+}
+const limits = sessionOptionsSchema.parse(
+  Object.fromEntries(
+    [
+      ["maxConcurrent", values.concurrency],
+      ["timeoutMs", values["timeout-ms"]],
+      ["lifetimeMs", values["lifetime-ms"]],
+      ["maxCalls", values["max-calls"]],
+    ]
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => [key, Number(value)]),
+  ),
+);
+const grants = grantsSchema.parse(
+  JSON.parse(await readFile(grantsFile, "utf8")),
+);
+const root = path.join(project, ".sites-runtime", "connector-preview");
+const id = randomUUID();
+const directory = path.join(root, id);
+const descriptor = path.join(root, "session.json");
+const active = new Set();
+const rpc = new JSONRPCClient(
+  (message) =>
+    new Promise((resolve, reject) => {
+      process.stdout.write(`${JSON.stringify(message)}\n`, (error) =>
+        error ? reject(error) : resolve(),
+      );
+    }),
+);
+const emit = (method, params) => rpc.notify(method, params);
+let closing = false;
+const binding = createPreviewBinding({
+  ...limits,
+  tools: grants.map((grant) => ({
+    ...grant,
+    async invoke(args) {
+      const requestId = randomUUID();
+      // JSON-RPC owns response matching and pending-call cleanup. Do not put an
+      // RPC timeout here: uncertain calls occupy their slot until they settle.
+      const response = await rpc.requestAdvanced({
+        jsonrpc: "2.0",
+        id: requestId,
+        method: "invoke",
+        params: {
+          connectorId: grant.connectorId,
+          actionName: grant.actionName,
+          arguments: args,
+        },
+      });
+      if (!closing)
+        emit("receipt", { id: requestId, at: new Date().toISOString() });
+      if (response.error)
+        throw new Error("The agent did not confirm a connector result.");
+      return response.result;
+    },
+  })),
+});
+await mkdir(directory, { recursive: true, mode: 0o700 });
+try {
+  // One owner per project. A crashed session must be explicitly cleaned up;
+  // never silently take over another agent's connector session.
+  await writeFile(
+    descriptor,
+    JSON.stringify({
+      id,
+      expiresAt:
+        limits.lifetimeMs === undefined ? null : Date.now() + limits.lifetimeMs,
+      timeoutMs: limits.timeoutMs,
+      connectorIds: [...new Set(grants.map((grant) => grant.connectorId))],
+    }),
+    { flag: "wx", mode: 0o600 },
+  );
+} catch (error) {
+  binding.close();
+  await rm(directory, { recursive: true, force: true });
+  throw error;
+}
+async function serve(name) {
+  active.add(name);
+  try {
+    const body = await readFile(path.join(directory, name), "utf8");
+    const response = await binding.fetch(
+      new Request("http://preview/invoke", { method: "POST", body }),
+    );
+    if (!closing) {
+      const output = path.join(
+        directory,
+        name.replace(".request", ".response"),
+      );
+      await writeFile(`${output}.tmp`, await response.text(), { mode: 0o600 });
+      await rename(`${output}.tmp`, output);
+    }
+  } catch {
+    // A timed-out caller can remove its request. The native call is never retried.
+  } finally {
+    await rm(path.join(directory, name), { force: true });
+    active.delete(name);
+  }
+}
+let scanning = false;
+// The mailbox crosses network namespaces through the shared project directory.
+// Atomic renames keep the reader from seeing partially written messages.
+const poller = setInterval(async () => {
+  if (closing || scanning) return;
+  scanning = true;
+  try {
+    for (const name of await readdir(directory)) {
+      if (/^[0-9a-f-]{36}\.request$/.test(name) && !active.has(name))
+        void serve(name);
+    }
+  } catch (error) {
+    if (!closing) {
+      emit("session_error", { code: error.code });
+      void close();
+    }
+  } finally {
+    scanning = false;
+  }
+}, 50);
+const expiry =
+  limits.lifetimeMs === undefined
+    ? undefined
+    : setTimeout(() => {
+        void close();
+      }, limits.lifetimeMs);
+if (process.stdin.isTTY) process.stdin.setRawMode(true);
+const input = createInterface({ input: process.stdin, terminal: false });
+input.on("line", (line) => {
+  try {
+    const message = driverMessageSchema.parse(JSON.parse(line));
+    if (message.method === "stop") {
+      void close();
+      return;
+    }
+    rpc.receive(message);
+  } catch {
+    emit("invalid_driver_message");
+  }
+});
+async function close() {
+  if (closing) return;
+  closing = true;
+  clearInterval(poller);
+  clearTimeout(expiry);
+  binding.close();
+  rpc.rejectAllPendingRequests("The connector preview session ended.");
+  await rm(descriptor, { force: true });
+  await rm(directory, { recursive: true, force: true });
+  if (process.stdin.isTTY) process.stdin.setRawMode(false);
+  input.close();
+  process.stdin.pause();
+  emit("closed");
+}
+input.on("close", () => {
+  void close();
+});
+process.stdin.on("data", (chunk) => {
+  if (chunk.includes(3)) void close();
+});
+process.on("SIGTERM", () => {
+  void close();
+});
+process.on("SIGINT", () => {
+  void close();
+});
+emit("ready", {
+  expiresInSeconds:
+    limits.lifetimeMs === undefined ? null : limits.lifetimeMs / 1000,
+  maxCalls: limits.maxCalls ?? null,
+  maxConcurrent: limits.maxConcurrent,
+  timeoutMs: limits.timeoutMs,
+});
+
+===== FIN: scripts/connector-preview/connector-preview-session.mjs =====
+
+
+===== ARCHIVO: scripts/connector-preview/host-binding.mjs =====
+import { Readable } from "node:stream";
+import { setMaxListeners } from "node:events";
+import getRawBody from "raw-body";
+import { z } from "zod/v4";
+import {
+  grantSchema,
+  invocationSchema,
+  sessionOptionsSchema,
+} from "./protocol.mjs";
+
+// Checks connector calls while the agent builds and tests a Site locally.
+// connector-preview-session.mjs uses this helper after the agent chooses the read
+// actions the Site may use. For each Site request, it checks that selection and
+// the session limits before asking the agent to make the actual tool call.
+// It also handles timeouts, shutdown, and which result fields reach the Site.
+// This runs in the agent's temporary session, not in the deployed Site.
+const messages = {
+  invalid_request: "This app request is invalid or too large.",
+  binding_unavailable:
+    "Connected apps need an active agent preview session in this preview.",
+  tool_not_allowed: "This preview cannot use the requested app action.",
+  rate_limited:
+    "A request limit was reached while using this connector. Please wait before trying again.",
+  tool_error: "An error was reported while running this connector action.",
+  upstream_error:
+    "The app did not return a confirmed result. The action may have completed; check before trying again.",
+};
+const failure = (status) => ({ status, message: messages[status] });
+const reply = (result) =>
+  Response.json(result, { headers: { "Cache-Control": "no-store" } });
+const requestIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9._:-]{1,128}$/)
+  .optional()
+  .catch(undefined);
+const resultSchema = z.object({
+  error: z.never().optional(),
+  status: z.never().optional(),
+  content: z.array(z.object({ type: z.string() }).catchall(z.json())),
+  structuredContent: z.json().optional(),
+  isError: z.boolean().optional(),
+  requestId: requestIdSchema,
+});
+
+export function createPreviewBinding({ tools, ...options }) {
+  const { lifetimeMs, timeoutMs, maxCalls, maxConcurrent } =
+    sessionOptionsSchema.parse(options);
+  const grants = new Map();
+  for (const tool of tools) {
+    const { invoke, ...grant } = tool;
+    if (!grantSchema.safeParse(grant).success || typeof invoke !== "function")
+      throw new Error(
+        "Preview tools must be authenticated, resolved read actions.",
+      );
+    const key = JSON.stringify([tool.connectorId, tool.actionName]);
+    if (grants.has(key))
+      throw new Error(
+        "Ambiguous connector action; the host must resolve its connection first.",
+      );
+    grants.set(key, tool.invoke);
+  }
+  const expiresAt =
+    lifetimeMs === undefined ? Infinity : Date.now() + lifetimeMs;
+  const ended = new AbortController();
+  setMaxListeners(maxConcurrent, ended.signal);
+  const expiry =
+    lifetimeMs === undefined
+      ? undefined
+      : setTimeout(() => ended.abort(), lifetimeMs);
+  expiry?.unref();
+  let remaining = maxCalls ?? Infinity;
+  let active = 0;
+
+  return {
+    close() {
+      clearTimeout(expiry);
+      ended.abort();
+    },
+    async fetch(request) {
+      if (ended.signal.aborted || Date.now() >= expiresAt)
+        return reply(failure("binding_unavailable"));
+      if (
+        request.method !== "POST" ||
+        new URL(request.url).pathname !== "/invoke"
+      )
+        return reply(failure("invalid_request"));
+      let call;
+      try {
+        const body = await readBounded(request, 65536);
+        call = invocationSchema.parse(JSON.parse(body));
+      } catch {
+        return reply(failure("invalid_request"));
+      }
+      // Recheck after reading the request; shutdown can happen while it streams.
+      if (ended.signal.aborted || Date.now() >= expiresAt)
+        return reply(failure("binding_unavailable"));
+      const invoke = grants.get(
+        JSON.stringify([call.connectorId, call.actionName]),
+      );
+      if (!invoke || remaining === 0) return reply(failure("tool_not_allowed"));
+      if (active >= maxConcurrent) return reply(failure("rate_limited"));
+      active++;
+      remaining--;
+      let deadline;
+      let onEnd;
+      try {
+        const result = await Promise.race([
+          // A timeout ends our wait, not the provider call. Count that work
+          // against concurrency until it settles, without blocking other slots.
+          Promise.resolve()
+            .then(() => invoke(call.arguments))
+            .then(publicResult)
+            .finally(() => {
+              active--;
+            }),
+          new Promise((resolve) => {
+            deadline = setTimeout(
+              () => resolve(failure("upstream_error")),
+              timeoutMs,
+            );
+          }),
+          new Promise((resolve) => {
+            onEnd = () => resolve(failure("upstream_error"));
+            ended.signal.addEventListener("abort", onEnd, { once: true });
+          }),
+        ]);
+        if (ended.signal.aborted || Date.now() >= expiresAt)
+          return reply(failure("upstream_error"));
+        if (
+          new TextEncoder().encode(JSON.stringify(result)).byteLength >
+          8 * 1024 * 1024
+        )
+          return reply(failure("upstream_error"));
+        return reply(result);
+      } catch {
+        return reply(failure("upstream_error"));
+      } finally {
+        clearTimeout(deadline);
+        ended.signal.removeEventListener("abort", onEnd);
+      }
+    },
+  };
+}
+
+export async function readBounded(request, limit) {
+  if (!request.body) throw new Error("Missing body");
+  const stream = Readable.fromWeb(request.body);
+  try {
+    // raw-body owns byte limits and stream errors; strict decoding rejects
+    // malformed UTF-8 instead of silently changing the caller's arguments.
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      await getRawBody(stream, { limit }),
+    );
+  } finally {
+    stream.destroy();
+  }
+}
+
+function publicResult(result) {
+  const parsed = resultSchema.safeParse(result);
+  if (!parsed.success) return failure("upstream_error");
+  result = parsed.data;
+  // Native tools return MCP results; convert once at the preview host boundary.
+  // Never accept provider-authored top-level status or transport metadata.
+  const payload = {
+    content: result.content,
+    // Like the hosted binding, preserve every JSON value, including null.
+    ...(result.structuredContent !== undefined
+      ? { structuredContent: result.structuredContent }
+      : {}),
+  };
+  const requestId =
+    result.requestId === undefined ? {} : { requestId: result.requestId };
+  if (result.isError === true) {
+    const detail = result.structuredContent;
+    if (detail?.error_code === "RATE_LIMITED") {
+      const retryAfterMs =
+        readRetryAfterMs(detail.retry_after_seconds) ??
+        readRetryAfterMs(detail.retry_after);
+      return {
+        ...failure("rate_limited"),
+        ...requestId,
+        ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+      };
+    }
+    const invalidArguments =
+      detail?.error_code === "INVALID_ARGUMENT" &&
+      detail.error_data?.type === "invalid_action_arguments" &&
+      detail.error_data?.failure_stage === "argument_binding";
+    return {
+      ...failure(invalidArguments ? "invalid_request" : "tool_error"),
+      result: payload,
+      ...requestId,
+    };
+  }
+  return { status: "success", result: payload, ...requestId };
+}
+
+function readRetryAfterMs(value) {
+  let milliseconds;
+  if (
+    typeof value === "number" ||
+    (typeof value === "string" && /^\d+$/.test(value.trim()))
+  ) {
+    milliseconds = Number(value) * 1000;
+  } else if (
+    typeof value === "string" &&
+    /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(
+      value.trim(),
+    )
+  ) {
+    milliseconds = Math.max(0, Date.parse(value) - Date.now());
+  }
+  return Number.isSafeInteger(milliseconds) && milliseconds >= 0
+    ? milliseconds
+    : undefined;
+}
+
+===== FIN: scripts/connector-preview/host-binding.mjs =====
+
+
+===== ARCHIVO: scripts/connector-preview/protocol.mjs =====
+import { z } from "zod";
+
+const name = z
+  .string()
+  .min(1)
+  .max(256)
+  .regex(/^[^\s/\x00-\x1f\x7f]+$/u);
+const fields = { connectorId: name, actionName: name };
+
+// Reject extra invocation fields: account selection and native tool names belong
+// to the owning agent, not to the generated Site's request envelope.
+export const invocationSchema = z
+  .object({ ...fields, arguments: z.record(z.unknown()) })
+  .strict();
+export const grantSchema = z
+  .object({ ...fields, readOnly: z.literal(true) })
+  .strict();
+export const grantsSchema = z.array(grantSchema);
+
+// Only the owning agent sets these limits. Sessions otherwise last until their
+// owner closes them; Node timers need a signed 32-bit millisecond duration.
+const duration = z
+  .number()
+  .int()
+  .positive()
+  .max(2 ** 31 - 1);
+export const sessionOptionsSchema = z
+  .object({
+    timeoutMs: duration.default(120000),
+    maxConcurrent: z.number().int().positive().safe().default(64),
+    lifetimeMs: duration.optional(),
+    maxCalls: z.number().int().positive().safe().optional(),
+  })
+  .strict();
+
+// The pipe carries JSON-RPC responses and a stop notification. Provider failures
+// still travel inside result as MCP results; JSON-RPC errors mean driver failure.
+export const driverMessageSchema = z.union([
+  z.object({ jsonrpc: z.literal("2.0"), method: z.literal("stop") }).strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: z.string().uuid(),
+      result: z.record(z.unknown()),
+    })
+    .strict(),
+  z
+    .object({
+      jsonrpc: z.literal("2.0"),
+      id: z.string().uuid(),
+      error: z
+        .object({
+          code: z.number().int(),
+          message: z.string(),
+          data: z.unknown().optional(),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
+
+===== FIN: scripts/connector-preview/protocol.mjs =====
+
+
+===== ARCHIVO: scripts/execution-profile.mjs =====
+import { readFileSync } from "node:fs";
+
+export function readExecutionProfile() {
+  let settings;
+  try {
+    settings = JSON.parse(readFileSync(new URL("../.sites-runtime/execution-profile.json", import.meta.url), "utf8"));
+  } catch (error) {
+    // Clean clones and remote builds have no checkout-local selection.
+    if (error.code === "ENOENT") return "portable";
+    throw error;
+  }
+  if (!["managed-linux", "portable"].includes(settings?.executionProfile)) {
+    throw new Error("Invalid local execution profile; rerun the Sites plugin's configure-execution-profile.mjs.");
+  }
+  return settings.executionProfile;
+}
+
+===== FIN: scripts/execution-profile.mjs =====
+
+
+===== ARCHIVO: scripts/install-ci.mjs =====
+import { spawnSync } from "node:child_process";
+import { accessSync, constants } from "node:fs";
+import path from "node:path";
+import { projectRoot } from "./sites-env.mjs";
+import { readExecutionProfile } from "./execution-profile.mjs";
+import { runNpmInstall } from "./npm-install.mjs";
+
+if (!process.env.npm_execpath) {
+  throw new Error("Run this installer with npm run install:ci.");
+}
+
+if (![
+  "SHARP_IGNORE_GLOBAL_LIBVIPS",
+  "SHARP_FORCE_GLOBAL_LIBVIPS",
+  "npm_config_build_from_source",
+  "NPM_CONFIG_BUILD_FROM_SOURCE",
+].some((key) => key in process.env)) {
+  process.env.SHARP_IGNORE_GLOBAL_LIBVIPS = "1";
+}
+
+if (readExecutionProfile() === "managed-linux") {
+  const result = spawnSync("bash", [path.join(projectRoot, "scripts/install-ci.sh")], {
+    stdio: "inherit",
+  });
+  if (result.error) throw result.error;
+  process.exit(result.status ?? 1);
+}
+
+// Invoke npm's JavaScript entrypoint, avoiding platform-specific shell shims.
+const installed = await runNpmInstall([
+  process.execPath,
+    process.env.npm_execpath, "ci", "--prefix", projectRoot, "--workspaces=false",
+    "--include=dev", "--include=optional", "--prefer-offline", "--no-audit", "--no-fund",
+]);
+if (installed.signal) process.kill(process.pid, installed.signal);
+if (installed.code !== 0 || installed.signal) process.exit(installed.code || 1);
+
+try {
+  accessSync(
+    path.join(
+      projectRoot, "node_modules", ".bin",
+      process.platform === "win32" ? "vinext.cmd" : "vinext",
+    ),
+    process.platform === "win32" ? constants.F_OK : constants.X_OK,
+  );
+} catch {
+  console.error("npm ci exited successfully but the local vinext executable is unavailable.");
+  process.exitCode = 69;
+}
+
+===== FIN: scripts/install-ci.mjs =====
+
+
+===== ARCHIVO: scripts/install-ci.sh =====
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "${SITES_ENV_READY:-}" != "1" ]]; then
+  exec "${script_dir}/sites-env.sh" -- "$0" "$@"
+fi
+
+command -v flock || {
+  echo "install-ci.sh requires Linux flock." >&2
+  exit 69
+}
+command -v timeout || {
+  echo "install-ci.sh requires GNU timeout." >&2
+  exit 69
+}
+command -v curl || {
+  echo "install-ci.sh requires curl for the locked-tarball preflight." >&2
+  exit 69
+}
+command -v sha256sum || {
+  echo "install-ci.sh requires sha256sum for cache and install verification." >&2
+  exit 69
+}
+
+runtime_root="${SITES_RUNTIME_ROOT:-${SITES_PROJECT_ROOT}/.sites-runtime}"
+expected_home="${runtime_root}/home"
+expected_cache="${runtime_root}/npm-cache"
+
+echo "[sites] validating writable install environment"
+if [[ "${HOME}" != "${expected_home}" ]]; then
+  echo "Expected HOME=${expected_home}, got HOME=${HOME}." >&2
+  exit 78
+fi
+actual_cache="$(npm --prefix "${SITES_PROJECT_ROOT}" --workspaces=false config get cache)"
+if [[ "${actual_cache}" != "${expected_cache}" ]]; then
+  echo "Expected npm cache ${expected_cache}, got ${actual_cache}." >&2
+  exit 78
+fi
+touch "${HOME}/.sites-write-test" "${expected_cache}/.sites-write-test"
+rm -f "${HOME}/.sites-write-test" "${expected_cache}/.sites-write-test"
+echo "[sites] environment passed: HOME=${HOME}, cache=${expected_cache}"
+
+lock_file="${runtime_root}/install.lock"
+exec 9>"${lock_file}"
+if ! flock -n 9; then
+  echo "Another dependency install is already running for ${SITES_PROJECT_ROOT}." >&2
+  exit 75
+fi
+
+# Catch an installer started outside this helper. Linux exposes both its command
+# line and working directory through /proc, so avoid broad process-name matches.
+for process in /proc/[0-9]*; do
+  pid="${process##*/}"
+  [[ "${pid}" != "$$" && "${pid}" != "${PPID}" ]] || continue
+  process_cwd="$(readlink -f "${process}/cwd" || true)"
+  [[ "${process_cwd}" == "${SITES_PROJECT_ROOT}" ]] || continue
+  process_command="$(tr '\0' ' ' <"${process}/cmdline" || true)"
+  if [[ "${process_command}" == *"npm ci"* ]]; then
+    echo "Another npm ci is visible in ${SITES_PROJECT_ROOT}; refusing to overlap installs." >&2
+    exit 75
+  fi
+done
+
+lockfile_sha256="$(sha256sum "${SITES_PROJECT_ROOT}/package-lock.json" | awk '{print $1}')"
+use_seeded_cache=0
+# Report seed selection separately from package cache hits or downloads.
+cache_seed_result=seed_unavailable
+seed_cache="${SITES_NPM_CACHE_SEED:-}"
+if [[ -n "${seed_cache}" && -d "${seed_cache}" ]]; then
+  seed_lockfile_sha256="$(cat "${seed_cache}/.sites-lockfile-sha256" || true)"
+  if [[ "${seed_lockfile_sha256}" == "${lockfile_sha256}" ]]; then
+    echo "[sites] restoring image-seeded npm cache"
+    cp -a "${seed_cache}/." "${expected_cache}/"
+    use_seeded_cache=1
+    cache_seed_result=seed_used
+    echo "[sites] image cache seed matched; registry fallback remains available"
+  else
+    cache_seed_result=seed_lockfile_mismatch
+    echo "[sites] image cache seed does not match this lockfile; using the network path"
+  fi
+fi
+
+locked_vinext_output="$({ node --input-type=module - "${SITES_PROJECT_ROOT}/package-lock.json" <<'NODE'
+import { readFile } from "node:fs/promises";
+
+const lock = JSON.parse(await readFile(process.argv[2], "utf8"));
+const vinext = lock.packages?.["node_modules/vinext"];
+if (!vinext?.resolved || !vinext?.integrity) {
+  throw new Error("package-lock.json does not contain a resolved, integrity-pinned vinext tarball");
+}
+console.log(vinext.resolved);
+console.log(vinext.integrity);
+NODE
+})" || {
+  echo "Could not read the integrity-pinned vinext tarball from package-lock.json." >&2
+  exit 65
+}
+mapfile -t locked_vinext <<<"${locked_vinext_output}"
+if [[ "${#locked_vinext[@]}" -ne 2 ]]; then
+  echo "Expected exactly one Vinext URL and integrity value from package-lock.json." >&2
+  exit 65
+fi
+
+locked_tarball="${locked_vinext[0]}"
+locked_integrity="${locked_vinext[1]}"
+
+if [[ "${use_seeded_cache}" == "0" ]]; then
+  registry="$(npm --prefix "${SITES_PROJECT_ROOT}" --workspaces=false config get registry)"
+  preflight_url="$({ node --input-type=module - "${locked_tarball}" "${registry}" <<'NODE'
+const locked = new URL(process.argv[2]);
+const registry = new URL(process.argv[3]);
+if (locked.hostname === "registry.npmjs.org") {
+  locked.protocol = registry.protocol;
+  locked.host = registry.host;
+  locked.pathname = `${registry.pathname.replace(/\/$/, "")}${locked.pathname}`;
+}
+process.stdout.write(locked.href);
+NODE
+})" || {
+  echo "Could not construct the locked-tarball preflight URL." >&2
+  exit 65
+  }
+
+  preflight_dir="${runtime_root}/preflight"
+  preflight_tarball="${preflight_dir}/vinext.tgz"
+  mkdir -p "${preflight_dir}"
+
+  echo "[sites] downloading the complete locked vinext tarball"
+  curl \
+    --fail \
+    --location \
+    --silent \
+    --show-error \
+    --retry 0 \
+    --connect-timeout 15 \
+    --max-time 120 \
+    --output "${preflight_tarball}" \
+    "${preflight_url}"
+
+  echo "[sites] verifying locked vinext tarball integrity"
+  node --input-type=module - "${preflight_tarball}" "${locked_integrity}" <<'NODE'
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+
+const [algorithm, expected] = process.argv[3].split("-", 2);
+if (!algorithm || !expected) {
+  throw new Error(`unsupported integrity value: ${process.argv[3]}`);
+}
+const actual = createHash(algorithm)
+  .update(await readFile(process.argv[2]))
+  .digest("base64");
+if (actual !== expected) {
+  throw new Error(`vinext tarball integrity mismatch for ${algorithm}`);
+}
+NODE
+  echo "[sites] network and integrity preflight passed"
+fi
+
+echo "[sites] running exactly one bounded npm ci"
+export NPM_CONFIG_MAXSOCKETS=1
+export NPM_CONFIG_FETCH_RETRIES=0
+export NPM_CONFIG_FETCH_TIMEOUT=30000
+npm_ci_args=(ci --prefix "${SITES_PROJECT_ROOT}" --workspaces=false --include=dev --include=optional --cache "${expected_cache}")
+if [[ "${use_seeded_cache}" == "1" ]]; then
+  npm_ci_args+=(--prefer-offline)
+fi
+timeout \
+  --signal=TERM \
+  --kill-after="${SITES_INSTALL_KILL_AFTER:-15s}" \
+  "${SITES_INSTALL_TIMEOUT:-8m}" \
+  node "${script_dir}/npm-install.mjs" "${cache_seed_result}" npm "${npm_ci_args[@]}"
+
+vinext="${SITES_PROJECT_ROOT}/node_modules/.bin/vinext"
+if [[ ! -x "${vinext}" ]]; then
+  echo "npm ci exited successfully but node_modules/.bin/vinext is unavailable." >&2
+  exit 69
+fi
+
+node --input-type=module - "${SITES_PROJECT_ROOT}/node_modules/.sites-install.json" "${lockfile_sha256}" <<'NODE'
+import { writeFile } from "node:fs/promises";
+
+await writeFile(
+  process.argv[2],
+  `${JSON.stringify({
+    lockfile_sha256: process.argv[3],
+    node: process.version,
+    platform: `${process.platform}-${process.arch}`,
+  }, null, 2)}\n`,
+);
+NODE
+echo "[sites] npm ci passed and vinext is available"
+
+===== FIN: scripts/install-ci.sh =====
+
+
+===== ARCHIVO: scripts/install-pnpm.sh =====
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "${SITES_ENV_READY:-}" != "1" ]]; then
+  exec "${script_dir}/sites-env.sh" -- "$0" "$@"
+fi
+
+require_shared=0
+prepare_only=0
+for argument in "$@"; do
+  case "${argument}" in
+    --require-shared) require_shared=1 ;;
+    --prepare-store) prepare_only=1 ;;
+    *) echo "Unknown pnpm installation option: ${argument}" >&2; exit 64 ;;
+  esac
+done
+
+for tool in flock timeout node; do
+  command -v "${tool}" >/dev/null || { echo "pnpm setup requires Linux flock, GNU timeout, and Node.js." >&2; exit 69; }
+done
+cache_seed=decision_unavailable
+store_scope=unknown
+store_state=unavailable
+report_store() {
+  node "${script_dir}/pnpm-install.mjs" --report-store "${cache_seed}" "${store_scope}" "${store_state}" "${prepare_only}"
+}
+# Publish preparation failures too; the optional report never decides success.
+trap 'report_store || true' EXIT
+
+if [[ -n "${SITES_PNPM_BIN:-}" && -f "${SITES_PNPM_BIN}" && -r "${SITES_PNPM_BIN}" ]]; then
+  pnpm_command=(node "${SITES_PNPM_BIN}")
+elif [[ "${require_shared}" == 1 ]]; then
+  echo "[sites] the image-pinned pnpm is unavailable" >&2
+  exit 69
+elif command -v corepack >/dev/null; then
+  # Corepack honors the established project's pin even when PATH has a different
+  # pnpm version. A bare pnpm is used only if Corepack is absent, then verified.
+  pnpm_command=(corepack pnpm)
+elif command -v pnpm >/dev/null; then
+  pnpm_command=(pnpm)
+else
+  echo "This pnpm project requires pnpm 11.25.0 or Corepack." >&2
+  exit 69
+fi
+
+runtime_root="${SITES_RUNTIME_ROOT:-${SITES_PROJECT_ROOT}/.sites-runtime}"
+private_store="${runtime_root}/pnpm-store"
+if [[ "${HOME}" != "${runtime_root}/home" || -L "${private_store}" ]]; then
+  echo "Dependency setup requires a project-owned writable home and pnpm store." >&2
+  exit 78
+fi
+# A single Node process owns the regular-file descriptors for both leases.
+# Closing its input (including this shell exiting) releases the project lock.
+coproc SITES_INSTALL_LOCKS {
+  node "${script_dir}/pnpm-install.mjs" --hold-install-locks \
+    "${runtime_root}/install.lock" "${SITES_PNPM_SHARED_STORE:-}.seed.lock" \
+    "${SITES_PNPM_STORE_LOCK_TIMEOUT:-30}"
+}
+install_lock_pid="${SITES_INSTALL_LOCKS_PID}"
+install_lock_output="${SITES_INSTALL_LOCKS[0]}"
+install_lock_input="${SITES_INSTALL_LOCKS[1]}"
+lock_status=unavailable
+read -r lock_status <&"${install_lock_output}" || true
+if [[ "${lock_status}" != locked ]]; then
+  exec {install_lock_input}>&-
+  exec {install_lock_output}<&-
+  wait "${install_lock_pid}" || true
+  if [[ "${l

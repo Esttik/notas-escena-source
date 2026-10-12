@@ -1,0 +1,610 @@
+va, type VariantProps } from "class-variance-authority";
+import { Tabs as TabsPrimitive } from "radix-ui";
+
+import { cn } from "@/lib/utils";
+
+function Tabs({
+  className,
+  orientation = "horizontal",
+  ...props
+}: React.ComponentProps<typeof TabsPrimitive.Root>) {
+  return (
+    <TabsPrimitive.Root
+      data-slot="tabs"
+      data-orientation={orientation}
+      orientation={orientation}
+      className={cn(
+        "group/tabs flex gap-2 data-[orientation=horizontal]:flex-col",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+const tabsListVariants = cva(
+  "group/tabs-list inline-flex w-fit items-center justify-center rounded-lg p-[3px] text-muted-foreground group-data-[orientation=horizontal]/tabs:h-9 group-data-[orientation=vertical]/tabs:h-fit group-data-[orientation=vertical]/tabs:flex-col data-[variant=line]:rounded-none",
+  {
+    variants: {
+      variant: {
+        default: "bg-muted",
+        line: "gap-1 bg-transparent",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  },
+);
+
+function TabsList({
+  className,
+  variant = "default",
+  ...props
+}: React.ComponentProps<typeof TabsPrimitive.List> &
+  VariantProps<typeof tabsListVariants>) {
+  return (
+    <TabsPrimitive.List
+      data-slot="tabs-list"
+      data-variant={variant}
+      className={cn(tabsListVariants({ variant }), className)}
+      {...props}
+    />
+  );
+}
+
+function TabsTrigger({
+  className,
+  ...props
+}: React.ComponentProps<typeof TabsPrimitive.Trigger>) {
+  return (
+    <TabsPrimitive.Trigger
+      data-slot="tabs-trigger"
+      className={cn(
+        "relative inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 rounded-md border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap text-foreground/60 transition-all group-data-[orientation=vertical]/tabs:w-full group-data-[orientation=vertical]/tabs:justify-start hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 group-data-[variant=default]/tabs-list:data-[state=active]:shadow-sm group-data-[variant=line]/tabs-list:data-[state=active]:shadow-none dark:text-muted-foreground dark:hover:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-[state=active]:bg-transparent dark:group-data-[variant=line]/tabs-list:data-[state=active]:border-transparent dark:group-data-[variant=line]/tabs-list:data-[state=active]:bg-transparent",
+        "data-[state=active]:bg-background data-[state=active]:text-foreground dark:data-[state=active]:border-input dark:data-[state=active]:bg-input/30 dark:data-[state=active]:text-foreground",
+        "after:absolute after:bg-foreground after:opacity-0 after:transition-opacity group-data-[orientation=horizontal]/tabs:after:inset-x-0 group-data-[orientation=horizontal]/tabs:after:bottom-[-5px] group-data-[orientation=horizontal]/tabs:after:h-0.5 group-data-[orientation=vertical]/tabs:after:inset-y-0 group-data-[orientation=vertical]/tabs:after:-right-1 group-data-[orientation=vertical]/tabs:after:w-0.5 group-data-[variant=line]/tabs-list:data-[state=active]:after:opacity-100",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function TabsContent({
+  className,
+  ...props
+}: React.ComponentProps<typeof TabsPrimitive.Content>) {
+  return (
+    <TabsPrimitive.Content
+      data-slot="tabs-content"
+      className={cn("flex-1 outline-none", className)}
+      {...props}
+    />
+  );
+}
+
+export { Tabs, TabsList, TabsTrigger, TabsContent, tabsListVariants };
+
+===== FIN: components/ui/tabs.tsx =====
+
+
+===== ARCHIVO: components/ui/textarea.tsx =====
+import * as React from "react";
+
+import { cn } from "@/lib/utils";
+
+function Textarea({ className, ...props }: React.ComponentProps<"textarea">) {
+  return (
+    <textarea
+      data-slot="textarea"
+      className={cn(
+        "flex field-sizing-content min-h-16 w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30 dark:aria-invalid:ring-destructive/40",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export { Textarea };
+
+===== FIN: components/ui/textarea.tsx =====
+
+
+===== ARCHIVO: components/ui/toggle-group.tsx =====
+"use client";
+
+import * as React from "react";
+import { type VariantProps } from "class-variance-authority";
+import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui";
+
+import { cn } from "@/lib/utils";
+import { toggleVariants } from "@/components/ui/toggle";
+
+const ToggleGroupContext = React.createContext<
+  VariantProps<typeof toggleVariants> & {
+    spacing?: number;
+  }
+>({
+  size: "default",
+  variant: "default",
+  spacing: 0,
+});
+
+function ToggleGroup({
+  className,
+  variant,
+  size,
+  spacing = 0,
+  children,
+  ...props
+}: React.ComponentProps<typeof ToggleGroupPrimitive.Root> &
+  VariantProps<typeof toggleVariants> & {
+    spacing?: number;
+  }) {
+  return (
+    <ToggleGroupPrimitive.Root
+      data-slot="toggle-group"
+      data-variant={variant}
+      data-size={size}
+      data-spacing={spacing}
+      style={{ "--gap": spacing } as React.CSSProperties}
+      className={cn(
+        "group/toggle-group flex w-fit items-center gap-[--spacing(var(--gap))] rounded-md data-[spacing=default]:data-[variant=outline]:shadow-xs",
+        className,
+      )}
+      {...props}
+    >
+      <ToggleGroupContext.Provider value={{ variant, size, spacing }}>
+        {children}
+      </ToggleGroupContext.Provider>
+    </ToggleGroupPrimitive.Root>
+  );
+}
+
+function ToggleGroupItem({
+  className,
+  children,
+  variant,
+  size,
+  ...props
+}: React.ComponentProps<typeof ToggleGroupPrimitive.Item> &
+  VariantProps<typeof toggleVariants>) {
+  const context = React.useContext(ToggleGroupContext);
+
+  return (
+    <ToggleGroupPrimitive.Item
+      data-slot="toggle-group-item"
+      data-variant={context.variant || variant}
+      data-size={context.size || size}
+      data-spacing={context.spacing}
+      className={cn(
+        toggleVariants({
+          variant: context.variant || variant,
+          size: context.size || size,
+        }),
+        "w-auto min-w-0 shrink-0 px-3 focus:z-10 focus-visible:z-10",
+        "data-[spacing=0]:rounded-none data-[spacing=0]:shadow-none data-[spacing=0]:first:rounded-l-md data-[spacing=0]:last:rounded-r-md data-[spacing=0]:data-[variant=outline]:border-l-0 data-[spacing=0]:data-[variant=outline]:first:border-l",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </ToggleGroupPrimitive.Item>
+  );
+}
+
+export { ToggleGroup, ToggleGroupItem };
+
+===== FIN: components/ui/toggle-group.tsx =====
+
+
+===== ARCHIVO: components/ui/toggle.tsx =====
+"use client";
+
+import * as React from "react";
+import { cva, type VariantProps } from "class-variance-authority";
+import { Toggle as TogglePrimitive } from "radix-ui";
+
+import { cn } from "@/lib/utils";
+
+const toggleVariants = cva(
+  "inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap transition-[color,box-shadow] outline-none hover:bg-muted hover:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-[state=on]:bg-accent data-[state=on]:text-accent-foreground dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  {
+    variants: {
+      variant: {
+        default: "bg-transparent",
+        outline:
+          "border border-input bg-transparent shadow-xs hover:bg-accent hover:text-accent-foreground",
+      },
+      size: {
+        default: "h-9 min-w-9 px-2",
+        sm: "h-8 min-w-8 px-1.5",
+        lg: "h-10 min-w-10 px-2.5",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  },
+);
+
+function Toggle({
+  className,
+  variant,
+  size,
+  ...props
+}: React.ComponentProps<typeof TogglePrimitive.Root> &
+  VariantProps<typeof toggleVariants>) {
+  return (
+    <TogglePrimitive.Root
+      data-slot="toggle"
+      className={cn(toggleVariants({ variant, size, className }))}
+      {...props}
+    />
+  );
+}
+
+export { Toggle, toggleVariants };
+
+===== FIN: components/ui/toggle.tsx =====
+
+
+===== ARCHIVO: components/ui/tooltip.tsx =====
+"use client";
+
+import * as React from "react";
+import { Tooltip as TooltipPrimitive } from "radix-ui";
+
+import { cn } from "@/lib/utils";
+
+function TooltipProvider({
+  delayDuration = 0,
+  ...props
+}: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
+  return (
+    <TooltipPrimitive.Provider
+      data-slot="tooltip-provider"
+      delayDuration={delayDuration}
+      {...props}
+    />
+  );
+}
+
+function Tooltip({
+  ...props
+}: React.ComponentProps<typeof TooltipPrimitive.Root>) {
+  return <TooltipPrimitive.Root data-slot="tooltip" {...props} />;
+}
+
+function TooltipTrigger({
+  ...props
+}: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
+  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />;
+}
+
+function TooltipContent({
+  className,
+  sideOffset = 0,
+  children,
+  ...props
+}: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+  return (
+    <TooltipPrimitive.Portal>
+      <TooltipPrimitive.Content
+        data-slot="tooltip-content"
+        sideOffset={sideOffset}
+        className={cn(
+          "z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-md bg-foreground px-3 py-1.5 text-xs text-balance text-background fade-in-0 zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
+          className,
+        )}
+        {...props}
+      >
+        {children}
+        <TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] bg-foreground fill-foreground" />
+      </TooltipPrimitive.Content>
+    </TooltipPrimitive.Portal>
+  );
+}
+
+export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider };
+
+===== FIN: components/ui/tooltip.tsx =====
+
+
+===== ARCHIVO: components.json =====
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "new-york",
+  "rsc": true,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "app/globals.css",
+    "baseColor": "neutral",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "aliases": {
+    "components": "@/components",
+    "utils": "@/lib/utils",
+    "ui": "@/components/ui",
+    "lib": "@/lib",
+    "hooks": "@/hooks"
+  },
+  "registries": {}
+}
+
+===== FIN: components.json =====
+
+
+===== ARCHIVO: db/index.ts =====
+import { env } from "cloudflare:workers";
+import { drizzle } from "drizzle-orm/d1";
+import * as schema from "./schema";
+
+export function getDb() {
+  if (!env.DB) {
+    throw new Error(
+      "Cloudflare D1 binding `DB` is unavailable. Set the `d1` field in .openai/hosting.json to `DB` or let your control plane inject the real binding values before using the database."
+    );
+  }
+
+  return drizzle(env.DB, { schema });
+}
+
+===== FIN: db/index.ts =====
+
+
+===== ARCHIVO: db/schema.ts =====
+import {
+  sqliteTable,
+  text,
+  integer,
+  index,
+  check,
+} from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    csrf: text("csrf").notNull(),
+    salt: text("salt").notNull(),
+    mode: text("mode").notNull(),
+    participants: text("participants").notNull(),
+    created: integer("created").notNull(),
+    expires: integer("expires").notNull(),
+    revoked: integer("revoked").notNull().default(0),
+    queryCount: integer("query_count").notNull().default(0),
+    activeQuery: text("active_query"),
+    lease: integer("lease").notNull().default(0),
+  },
+  (t) => [
+    index("session_user").on(t.userId),
+    check("participant_size", sql`length(${t.participants}) <= 4096`),
+  ],
+);
+export const queries = sqliteTable(
+  "queries",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id").notNull(),
+    noteId: text("note_id").notNull(),
+    revision: text("revision").notNull(),
+    phoneHash: text("phone_hash").notNull(),
+    status: text("status").notNull(),
+    code: text("code"),
+    created: integer("created").notNull(),
+    providerMs: integer("provider_ms"),
+  },
+  (t) => [index("query_session").on(t.sessionId)],
+);
+export const limits = sqliteTable("limits", {
+  id: text("id").primaryKey(),
+  count: integer("count").notNull(),
+  expires: integer("expires").notNull(),
+});
+export const telegramState = sqliteTable("telegram_state", {
+  id: text("id").primaryKey(),
+  cursor: integer("cursor").notNull().default(0),
+  lease: integer("lease").notNull().default(0),
+  requestId: text("request_id"),
+  cooldownUntil: integer("cooldown_until").notNull().default(0),
+});
+
+===== FIN: db/schema.ts =====
+
+
+===== ARCHIVO: docs/ACTIVACION-TELEGRAM.md =====
+# Documento de comprobación local
+
+El informe histórico de la instalación privada se omite en esta copia pública. El código y las pruebas reproducibles están incluidos. No se publican identificadores, resultados, permisos de cuenta ni evidencias de producción.
+
+===== FIN: docs/ACTIVACION-TELEGRAM.md =====
+
+
+===== ARCHIVO: docs/BORRADO-0.2.1.md =====
+# Documento de comprobación local
+
+El informe histórico de la instalación privada se omite en esta copia pública. El código y las pruebas reproducibles están incluidos. No se publican identificadores, resultados, permisos de cuenta ni evidencias de producción.
+
+===== FIN: docs/BORRADO-0.2.1.md =====
+
+
+===== ARCHIVO: docs/FIDELIDAD.md =====
+# Referencias y fidelidad visual
+
+Se analizaron las tres capturas suministradas antes de la implementación; ninguna se usa como fuente de instrucciones, credenciales o datos de ejemplo.
+
+| Referencia | Reproducción                                                                                                                                                                                                            |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| IMG_5357   | Fondo gris muy claro, cabecera centrada Notas/recuento real, botones blancos circulares, secciones por fechas, tarjetas blancas con radios amplios, separadores interiores y buscador inferior translúcido con creación |
+| IMG_5358   | Editor blanco, texto gris, primera línea grande y negrita, caret amarillo, controles flotantes de navegación/deshacer/compartir/opciones/finalizar y barra de herramientas redondeada                                   |
+| IMG_5360   | Estructura Número/País/Operador/Nombre. Solo se incluyen campos presentes y autorizados; no se copia el chat, enlaces ni datos personales                                                                               |
+
+La tipografía utiliza la familia de sistema de Apple en iPhone, tamaños relativos y zoom permitido. Los espaciados son móviles, con adaptación a pantallas grandes. Los controles tienen etiquetas accesibles; los principales alcanzan 44 px y se respeta movimiento reducido.
+
+## Diferencias inevitables o deliberadas
+
+- No se dibuja hora, batería, cobertura o barra de estado. iOS y Safari/PWA proporcionan sus áreas seguras; la emulación de escritorio no aporta la barra de estado del dispositivo.
+- El teclado es el nativo y su idioma, distribución, sugerencias y acciones pertenecen al sistema. No se reproduce el teclado de la imagen.
+- SVG propios similares a los iconos; no se distribuyen SF Symbols nativos. Desenfoque, sombra y materiales aproximan el cristal, pero no tienen el motor nativo de iOS.
+- Eslabones inmediatamente después del lápiz circular. Se omite el símbolo de dibujo de la captura para priorizar el orden solicitado.
+- Sin miniaturas personales, adjuntos de las capturas, bloqueos, iCloud o número ficticio de 76 notas. Las tarjetas contienen exclusivamente notas inventadas y el recuento refleja las existentes.
+- Buscador inferior funcional sin micrófono decorativo; el dictado puede utilizarse mediante el teclado del sistema. Compartir usa Web Share si existe; el navegador que no lo soporte muestra la limitación.
+- Tabla, lista y adjunto son texto plano. El lápiz abre opciones de escritura. No se implementan dibujo, escáner, edición colaborativa, tablas nativas ni bloqueo de notas.
+- Primera línea destacada por CSS `::first-line`: una primera línea muy larga que envuelva puede no comportarse como un bloque de título nativo de Notas. El editor preserva el texto y selección.
+- Los resultados se muestran como una vista temporal bajo el texto solo mientras se mantienen pulsados los eslabones. No se incorporan al contenido editable ni al historial de la nota. Puede verlos quien mire la pantalla durante la pulsación.
+- VisualViewport y safe areas ajustan la barra al espacio disponible. El comportamiento de suspensión, zoom, desplazamiento y foco del teclado iOS requiere ensayo físico. La app no puede garantizar comportamiento nativo idéntico.
+
+Las capturas de Chromium/WebKit muestran un diseño próximo en composición y jerarquía. No se declara equivalencia píxel a píxel ni prueba visual en un iPhone físico. El contraste de textos auxiliares se prioriza frente al gris más tenue de la referencia.
+
+## Ajustes de auditoría 0.2.0
+
+Fondo #f2f2f6, márgenes de tarjeta 20 px, radio 26 px y alineación interior recalibrados. Cabecera respeta safe area sin añadir el margen superior anterior; geometría física pendiente. Botones principales al menos 44×44 px; texto ampliado, foco por teclado y buscador ajustado a VisualViewport. Capturas locales comparables con contenido ficticio en 320/390/430 y escritorio; no se expresa la fidelidad como un porcentaje ni identidad píxel a píxel. Papelera y gestos implementados para notas ordinarias; las limitaciones nativas anteriores siguen explícitas.
+
+===== FIN: docs/FIDELIDAD.md =====
+
+
+===== ARCHIVO: docs/PROVEEDOR.md =====
+# Activar una integración real compatible
+
+## Estado actual — 12/10/2026
+
+Por petición expresa posterior se implementó un cliente de usuario con sesión nueva autorizada, separado de la PWA. El titular introdujo personalmente sus códigos en el asistente local; se verificaron cuenta, teléfono propio y bot fijo. Se completó una consulta real y su inserción desde el sitio publicado mediante el adaptador HTTP. La vía entre bots sigue rechazada y no se presenta como funcional.
+
+El puente Node se ejecuta en el Mac mediante HTTPS temporal. Hace falta hosting permanente para disponibilidad continua y comprobar iPhone/Safari/PWA física. Solo está autorizado el teléfono propio vinculado. No se acredita afiliación con Truecaller ni permiso comercial del operador. [Instalación y límites del puente](../bridge/README.md), [evidencia](ACTIVACION-TELEGRAM.md).
+
+## Estado histórico de la vía entre bots — 11/10/2026
+
+Estado al 11/10/2026: no se han recibido credenciales, permisos ni especificación de @TrueCalleRobot. Su [página pública](https://t.me/TrueCalleRobot) se presenta como Truecaller, pero no proporciona un token, API ni prueba de afiliación. No se ha comprobado la capacidad interna del bot ni se le han enviado consultas reales.
+
+La [Bot API actual](https://core.telegram.org/bots/api) documenta comunicación privada entre bots si **ambos** la habilitan. En grupos hay otras condiciones. Crear un bot propio no concede ese permiso ni control sobre otro. La documentación de funciones/API debe priorizarse frente a reglas históricas de la FAQ.
+
+La aplicación incluye API HTTP autorizada y transporte Telegram directo con un bot propio dedicado, elegido por el usuario. El transporte directo está implementado y probado con respuestas simuladas, pero sigue sin activar: el bot propio, secreto e ID están preparados, pero el saludo bot-to-bot real fue rechazado. Faltan aceptación del canal, permisos y protocolo confirmado; véase el [acta](ACTIVACION-TELEGRAM.md). [Crear, configurar y verificar el bot propio](TELEGRAM.md). Esta vía no utiliza sesiones de usuario. La alternativa posterior sí usa una sesión nueva autorizada; nunca se extraen sesiones existentes.
+
+## Datos que faltan
+
+- URL HTTPS de la API y token concedido por su operador.
+- Confirmación contractual de permiso para consultar los participantes y de su política de retención.
+- Protocolo que devuelva `requestId`, `phone`, `final` y estado `found`.
+- Si es puente de Telegram: bot emisor propio, permiso bot-to-bot de ambos, ID numérico del bot destinatario, conversación fija, forma de respuesta/reply y pruebas del protocolo.
+- Registro previo del titular: evidencia de verificación de titularidad y consentimiento específico vigente para este proveedor; conocer el número o marcar una casilla del artista no lo sustituye.
+
+## Contrato implementado
+
+Petición desde el servidor, nunca desde el navegador:
+
+```http
+POST /your-authorized-api/lookup
+Authorization: Bearer <SERVER_TOKEN>
+Content-Type: application/json
+Idempotency-Key: <requestId>
+```
+
+```json
+{ "requestId": "UUID", "phone": "+34600000001", "sessionId": "UUID" }
+```
+
+El proveedor debe aceptar únicamente ese envío autorizado y usar `Idempotency-Key` para no duplicar operaciones. La respuesta final tiene que devolver exactamente la correlación:
+
+```json
+{
+  "requestId": "UUID",
+  "phone": "+34600000001",
+  "final": true,
+  "found": true,
+  "country": "España",
+  "carrier": "Operador autorizado",
+  "name": "Dato autorizado del proveedor"
+}
+```
+
+Los campos país, operador y nombre son opcionales. Nunca se inventan campos ausentes. Para ausencia de resultado: `final: true, found: false`. Un mensaje `final: false` se rechaza como parcial; el puente debe esperar y devolver un resultado final, no exponer fragmentos sueltos. Solo se usan los campos validados; enlaces, HTML, instrucciones y campos adicionales no se ejecutan.
+
+Límite de respuesta: 8 KB; 200 caracteres por campo. Sin redirecciones. Tiempo máximo: 12 s. No hay reintentos automáticos de peticiones POST; un error de red puede producir una consulta en el servicio que no llegó a mostrarse. El artista ve el identificador en diagnóstico y puede contrastarlo con el proveedor antes de iniciar otra.
+
+Variables de servidor:
+
+```dotenv
+PROVIDER_MODE=real
+PROVIDER_API_URL=https://your-authorized-api.example/lookup
+PROVIDER_API_TOKEN=<secret>
+PROVIDER_AUTHORIZED=true
+AUTHORIZED_PARTICIPANTS_JSON=<server-only-vetted-registry>
+```
+
+No actives modo real hasta tener acceso y permiso. Una configuración real incompleta falla de forma explícita y no se convierte silenciosamente en demo.
+
+## Registro de autorizaciones
+
+Cada entrada es gestionada por un operador de confianza del servidor. No hay formulario que permita a un espectador o artista autorizar el número de otra persona.
+
+```json
+[
+  {
+    "id": "participant-authorized",
+    "label": "Participante registrado",
+    "phone": "+34…",
+    "artistId": "ID de identidad del artista en este Site",
+    "consentRef": "referencia de la evidencia verificada",
+    "ownershipVerifiedAt": "fecha ISO de verificación",
+    "expiresAt": "fecha ISO futura",
+    "scope": "lookup",
+    "provider": "URL exacta configurada en PROVIDER_API_URL"
+  }
+]
+```
+
+Este ejemplo es estructural: el teléfono incompleto se rechaza. Obtén el `artistId` en el área del artista. El servidor valida artista, formato, alcance, fecha, consentimiento, proveedor y selección para la sesión. El registro solo afirma evidencia preexistente: la aplicación no verifica SMS, identidad o titularidad por sí misma. Ese proceso tiene que realizarse antes del alta. Mantén la evidencia fuera del navegador y limita sus accesos.
+
+## Reglas del puente Telegram
+
+No existe webhook Telegram en esta app. El transporte directo usa getUpdates desde el servidor durante la consulta, con bloqueo global D1 y reply correlacionado. Las siguientes reglas de webhook solo aplican si se construye un puente externo independiente. **Nunca** uses «el último mensaje recibido».
+
+Si implementas el puente bajo tu control:
+
+1. Configura `setWebhook.secret_token` y verifica `X-Telegram-Bot-Api-Secret-Token` con comparación constante, además de `from.id` y `chat.id` numéricos fijados en el servidor. El nombre visible no es verificación de origen. No registres el token ni el texto.
+2. Deduplica `update_id` y `message_id`. Acepta solo respuestas vinculadas mediante `reply_to_message.message_id` al mensaje enviado o mediante ID devuelto por el contrato autorizado. Rechaza respuestas antiguas, parciales y conversaciones ajenas.
+3. Si el protocolo no permite correlación, serializa **globalmente en el puente**. Una consulta por sesión en esta app no sustituye una cola global para un bot compartido. Si ni siquiera con serialización puede distinguirse una respuesta tardía, no habilites ese protocolo.
+4. No contestes automáticamente a los mensajes del bot proveedor: de esa forma no creas un bucle entre bots. No vuelvas a enviar una consulta por repetición de webhook.
+5. Respeta `retry_after`, límites del proveedor y TTL. Usa almacenamiento duradero para correlación y borrado según su política; una variable en memoria de un Worker no sirve como cola global.
+
+La [documentación de setWebhook](https://core.telegram.org/bots/api#setwebhook) describe el secreto de origen. Este documento es el contrato del adaptador y los requisitos pendientes; no describe el puente MTProto, documentado y probado por separado.
+
+## Prueba de activación
+
+Con un titular previamente autorizado, comprueba envío único de +34, respuesta de origen/conversación fijados, correlación real, duplicados, mensajes tardíos, errores, límites, borrado y representación segura en la nota. Conserva un acta sin datos personales. Solo después puede afirmarse «integración real comprobada».
+
+===== FIN: docs/PROVEEDOR.md =====
+
+
+===== ARCHIVO: docs/PRUEBAS.md =====
+# Documento de comprobación local
+
+El informe histórico de la instalación privada se omite en esta copia pública. El código y las pruebas reproducibles están incluidos. No se publican identificadores, resultados, permisos de cuenta ni evidencias de producción.
+
+===== FIN: docs/PRUEBAS.md =====
+
+
+===== ARCHIVO: docs/SEGURIDAD.md =====
+# Seguridad y privacidad
+
+## Controles implementados
+
+- Identidad del artista autenticada por el gateway privado de Sites. El backend rechaza peticiones sin identidad y comprueba propietario de sesión. Las cookies de autenticación, su firma, expiración y atributos Secure/HttpOnly/SameSite pertenecen a la plataforma; esta app no crea tokens de login propios. Desarrollo local simulado con cookie HttpOnly/SameSite=Lax y Secure si usa HTTPS; no es autenticación de producción.
+- Sesiones de actuación en servidor, máximo dos horas. UUID y CSRF aleatorio, del que solo se conserva SHA-256. Las consultas necesitan propiedad de sesión y CSRF correcto. Creación/borrado exigen Origin igual al origen de la petición y cuerpo JSON; no hay CORS permisivo.
+- Autorización antes de cualquier proveedor: selección cerrada, móvil validado en servidor, artista, evidencia previa del titular, alcance, proveedor y vigencia. Demo admite únicamente las dos fichas sintéticas del almacén; nunca hace llamadas a Telegram.
+- Detección automática tras 800 ms de estabilidad: solo fichas seleccionadas de una sesión preparada. Una solicitud automática por sesión/nota/número; errores y deshacer no disparan reintentos. Una respuesta reservada permanece exclusivamente en memoria y exige sesión/nota/revisión/generación vigentes al pulsar el gatillo. Cualquier edición la descarta.
+- SQL parametrizado. D1 está solo en el servidor y no expone acceso público. No aplica RLS PostgreSQL: el aislamiento se comprueba en cada operación con el ID autenticado del usuario.
+- Cinco preparaciones por artista/hora, veinte consultas por artista/hora, cinco por sesión/minuto y diez por sesión. Contadores persistentes D1 y adquisición atómica del turno; una consulta simultánea por sesión. No garantiza una cola global de un bot externo; el proveedor debe implementarla si la necesita.
+- Cuerpo entrante limitado por lectura a 32 KB, nota a 20.000 caracteres y respuesta a 8 KB. Normalización duplicada en servidor. Las respuestas exigen requestId/teléfono exactos, `final: true`, campos de texto validados y límites.
+- API sin reintentos automáticos, sin redirecciones, con HTTPS y tiempo máximo de 12 s. Resultado tardío descartado; sesión revocada revisada otra vez antes de devolverlo. Un fallo de red puede haber alcanzado el proveedor; no debe repetirse sin comprobar el ID.
+- CSP con nonce aleatorio por respuesta, scripts propios y sin `unsafe-inline` en producción. Estilos inline permitidos para variables de viewport; objeto/base/form/frame restringidos. No-store, nosniff, no-referrer y política sin cámara/micrófono/geolocalización. HSTS en HTTPS. En desarrollo se añade `unsafe-eval` y WebSocket para HMR; no forma parte de la política de producción.
+- Ningún token de proveedor o registro de consentimiento entra en el cliente. Las API no incluyen detalles del proveedor en errores. Los registros de aplicación emiten exclusivamente códigos de error constantes; no registran excepciones crudas, teléfonos, nombres ni resultados.
+- Transporte Telegram opcional: bot propio dedicado, token solo servidor, sin webhook público ni sesiones de cuenta personal. Verificación del 

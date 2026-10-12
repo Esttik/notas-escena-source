@@ -1,0 +1,454 @@
+ARCHIVO ORIGINAL: lib/server/telegram.ts
+
+import {
+  AppError,
+  digest,
+  normalizePhone,
+  validateResult,
+  type QueryResult,
+} from "../domain.ts";
+import type { Provider, ProviderConfig, ProviderInput } from "./providers.ts";
+import type { Store } from "./store.ts";
+
+type Fetcher = (
+  url: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+type State = {
+  cursor: number;
+  request_id: string | null;
+  lease: number;
+  cooldown_until: number;
+};
+type RecordValue = Record<string, unknown>;
+const object = (v: unknown): RecordValue =>
+  v && typeof v === "object" && !Array.isArray(v) ? (v as RecordValue) : {};
+const validId = (v: unknown): v is number =>
+  typeof v === "number" && Number.isSafeInteger(v) && v > 0;
+const timeout = () =>
+  new AppError(
+    "TIMEOUT",
+    "Tiempo de espera agotado. La consulta no se reintenta.",
+    504,
+  );
+class TelegramRateError extends AppError {
+  retryAfter: number;
+  constructor(seconds: number) {
+    super(
+      "PROVIDER_RATE_LIMIT",
+      "Telegram limita las consultas; espera antes de iniciar otra.",
+      429,
+    );
+    this.retryAfter = Math.min(
+      86400,
+      Math.max(1, Number.isFinite(seconds) ? seconds : 60),
+    );
+  }
+}
+
+/** This is a configured protocol, not a claim about the live third-party bot. */
+export function parseTelegramResult(
+  text: string,
+  requestId: string,
+  phone: string,
+  config: ProviderConfig,
+): QueryResult {
+  if (
+    typeof text !== "string" ||
+    new TextEncoder().encode(text).length > 8192 ||
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)
+  )
+    throw new AppError("INVALID_RESULT", "Texto de respuesta no válido.", 502);
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  const numbers = lines.filter((line) => /^Number\s*:/i.test(line));
+  if (numbers.length !== 1)
+    throw new AppError(
+      "INVALID_RESULT",
+      "Campo de número ausente o duplicado.",
+      502,
+    );
+  if (normalizePhone(numbers[0].replace(/^Number\s*:/i, "")) !== phone)
+    throw new AppError(
+      "CORRELATION",
+      "La respuesta no corresponde a esta petición.",
+      502,
+    );
+  const last = lines.filter(Boolean).at(-1);
+  if (config.TELEGRAM_NO_RESULT_TEXT && last === config.TELEGRAM_NO_RESULT_TEXT)
+    return validateResult(
+      { requestId, phone, final: true, found: false },
+      requestId,
+      phone,
+    );
+  if (!config.TELEGRAM_FINAL_SUFFIX || last !== config.TELEGRAM_FINAL_SUFFIX)
+    throw new AppError(
+      "PARTIAL",
+      "Respuesta parcial: falta el marcador final configurado.",
+      502,
+    );
+  const value: RecordValue = { requestId, phone, final: true, found: true };
+  for (const [label, key] of [
+    ["Country", "country"],
+    ["Carrier", "carrier"],
+    ["Name", "name"],
+  ]) {
+    const matches = lines.filter((line) =>
+      new RegExp(`^${label}\\s*:`, "i").test(line),
+    );
+    if (matches.length > 1)
+      throw new AppError(
+        "INVALID_RESULT",
+        "Campo duplicado en la respuesta.",
+        502,
+      );
+    if (matches.length)
+      value[key] = matches[0].replace(
+        new RegExp(`^${label}\\s*:\\s*`, "i"),
+        "",
+      );
+  }
+  return validateResult(value, requestId, phone);
+}
+
+export class TelegramProvider implements Provider {
+  mode = "real" as const;
+  config: ProviderConfig;
+  store: Store;
+  fetcher: Fetcher;
+  target: number;
+  ownId: number;
+  constructor(config: ProviderConfig, store: Store, fetcher: Fetcher = fetch) {
+    this.config = config;
+    this.store = store;
+    this.fetcher = fetcher;
+    this.target = Number(config.TELEGRAM_TARGET_BOT_ID);
+    this.ownId = Number(config.TELEGRAM_BOT_TOKEN?.split(":")[0]);
+    if (
+      !/^\d+:[A-Za-z0-9_-]{10,}$/.test(config.TELEGRAM_BOT_TOKEN ?? "") ||
+      !validId(this.target) ||
+      !validId(this.ownId) ||
+      this.target === this.ownId ||
+      config.TELEGRAM_TARGET_USERNAME !== "TrueCalleRobot" ||
+      config.PROVIDER_AUTHORIZED !== "true" ||
+      config.TELEGRAM_PROTOCOL_CONFIRMED !== "true" ||
+      !config.TELEGRAM_FINAL_SUFFIX ||
+      config.TELEGRAM_FINAL_SUFFIX.length > 100 ||
+      /[\r\n]/.test(config.TELEGRAM_FINAL_SUFFIX) ||
+      (config.TELEGRAM_NO_RESULT_TEXT &&
+        (config.TELEGRAM_NO_RESULT_TEXT.length > 100 ||
+          /[\r\n]/.test(config.TELEGRAM_NO_RESULT_TEXT)))
+    )
+      throw new AppError(
+        "PROVIDER_CONFIG",
+        "Faltan configuración, permiso o protocolo confirmado de Telegram.",
+        503,
+      );
+  }
+  async call(
+    method:
+      | "getMe"
+      | "getWebhookInfo"
+      | "getChat"
+      | "sendMessage"
+      | "getUpdates",
+    body: RecordValue,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    if (signal.aborted) throw timeout();
+    let response: Response;
+    try {
+      response = await this.fetcher(
+        `https://api.telegram.org/bot${this.config.TELEGRAM_BOT_TOKEN}/${method}`,
+        {
+          method: "POST",
+          redirect: "error",
+          signal,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+    } catch {
+      // fetch exceptions may contain the URL, which embeds the token. Never expose them.
+      if (signal.aborted) throw timeout();
+      throw new AppError(
+        "TELEGRAM_NETWORK",
+        "No se pudo comunicar con Telegram. El envío no se repite.",
+        502,
+      );
+    }
+    if (signal.aborted) throw timeout();
+    const reader = response.body?.getReader();
+    if (!reader)
+      throw new AppError("INVALID_RESULT", "Respuesta vacía de Telegram.", 502);
+    let content = "",
+      size = 0;
+    const decoder = new TextDecoder();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (signal.aborted) {
+          await reader.cancel();
+          throw timeout();
+        }
+        size += value.byteLength;
+        if (size > 131072) {
+          await reader.cancel();
+          throw new AppError(
+            "INVALID_RESULT",
+            "Respuesta excesiva de Telegram.",
+            502,
+          );
+        }
+        content += decoder.decode(value, { stream: true });
+      }
+    } catch (e) {
+      if (e instanceof AppError) throw e;
+      if (signal.aborted) throw timeout();
+      throw new AppError(
+        "TELEGRAM_NETWORK",
+        "Lectura de Telegram interrumpida.",
+        502,
+      );
+    }
+    if (signal.aborted) throw timeout();
+    let value: RecordValue;
+    try {
+      value = object(JSON.parse(content + decoder.decode()));
+    } catch {
+      throw new AppError("INVALID_RESULT", "JSON de Telegram no válido.", 502);
+    }
+    if (response.status === 429 || value.error_code === 429)
+      throw new TelegramRateError(Number(object(value.parameters).retry_after));
+    if (response.status === 409 || value.error_code === 409)
+      throw new AppError(
+        "TELEGRAM_CONSUMER_CONFLICT",
+        "El bot tiene otro consumidor o webhook. Usa un bot dedicado.",
+        503,
+      );
+    if (!response.ok || value.ok !== true) {
+      if (/bot[ _-]?to[ _-]?bot/i.test(String(value.description ?? "")))
+        throw new AppError(
+          "TELEGRAM_BOT_TO_BOT_DISABLED",
+          "Telegram rechaza la comunicación entre bots. Revisa la configuración de ambos.",
+          503,
+        );
+      throw new AppError(
+        "TELEGRAM_API",
+        "Telegram rechazó la operación. Comprueba el bot y los permisos.",
+        502,
+      );
+    }
+    return value.result;
+  }
+  async check(signal: AbortSignal) {
+    const me = object(await this.call("getMe", {}, signal));
+    if (me.is_bot !== true || me.id !== this.ownId)
+      throw new AppError(
+        "TELEGRAM_AUTH",
+        "El token no corresponde al bot propio configurado.",
+        503,
+      );
+    const webhook = object(await this.call("getWebhookInfo", {}, signal));
+    if (typeof webhook.url !== "string" || webhook.url)
+      throw new AppError(
+        "TELEGRAM_WEBHOOK",
+        "Usa un bot dedicado sin webhook activo. No se modificará su configuración.",
+        503,
+      );
+    const chat = object(
+      await this.call(
+        "getChat",
+        { chat_id: `@${this.config.TELEGRAM_TARGET_USERNAME}` },
+        signal,
+      ),
+    );
+    if (
+      chat.id !== this.target ||
+      chat.type !== "private" ||
+      String(chat.username).toLowerCase() !==
+        this.config.TELEGRAM_TARGET_USERNAME!.toLowerCase()
+    )
+      throw new AppError(
+        "TELEGRAM_TARGET",
+        "El ID de conversación no corresponde al bot destinatario configurado.",
+        503,
+      );
+    return {
+      transport: "telegram",
+      authenticated: true,
+      targetVerified: true,
+      webhookAbsent: true,
+      communication: "not_verified",
+    };
+  }
+  async lookup(input: ProviderInput): Promise<QueryResult> {
+    if (normalizePhone(input.phone) !== input.phone)
+      throw new AppError(
+        "INVALID_PHONE",
+        "Telegram requiere un número normalizado.",
+      );
+    // Stable per bot, including across credential rotation. No token is stored.
+    const key = await digest(`telegram:bot:${this.ownId}`);
+    await this.store.run(
+      "INSERT INTO telegram_state (id) VALUES (?) ON CONFLICT(id) DO NOTHING",
+      key,
+    );
+    const now = Date.now();
+    const state = await this.store.one<State>(
+      "UPDATE telegram_state SET request_id=?,lease=? WHERE id=? AND lease<? AND cooldown_until<=? RETURNING *",
+      input.requestId,
+      now + 15000,
+      key,
+      now,
+      now,
+    );
+    if (!state)
+      throw new AppError(
+        "TELEGRAM_BUSY",
+        "Hay una consulta pendiente o Telegram requiere espera. No se ha enviado otra.",
+        409,
+      );
+    // Telegram may randomize update IDs after a week without updates. Replayed
+    // older messages still cannot match the newly sent reply message ID.
+    let cursor = state.cooldown_until < now - 6 * 86400000 ? 0 : state.cursor;
+    if (cursor !== state.cursor)
+      await this.store.run(
+        "UPDATE telegram_state SET cursor=0 WHERE id=? AND request_id=?",
+        key,
+        input.requestId,
+      );
+    const alive = async () => {
+      if (input.signal.aborted) throw timeout();
+      const row = await this.store.one<State>(
+        "SELECT * FROM telegram_state WHERE id=?",
+        key,
+      );
+      if (!row || row.request_id !== input.requestId || row.lease <= Date.now())
+        throw timeout();
+    };
+    try {
+      await this.check(input.signal);
+      await alive();
+      // Sending once is essential: Telegram sendMessage has no request idempotency key.
+      const sent = object(
+        await this.call(
+          "sendMessage",
+          {
+            chat_id: this.target,
+            text: input.phone,
+            disable_notification: true,
+          },
+          input.signal,
+        ),
+      );
+      const sentChat = object(sent.chat);
+      if (
+        !validId(sent.message_id) ||
+        sentChat.id !== this.target ||
+        sentChat.type !== "private"
+      )
+        throw new AppError(
+          "TELEGRAM_TARGET",
+          "Telegram no confirmó el envío a la conversación configurada.",
+          502,
+        );
+      for (let poll = 0; poll < 8; poll++) {
+        await alive();
+        const updates = await this.call(
+          "getUpdates",
+          {
+            offset: cursor,
+            limit: 10,
+            timeout: 2,
+            allowed_updates: ["message"],
+          },
+          input.signal,
+        );
+        await alive();
+        if (!Array.isArray(updates) || updates.length > 10)
+          throw new AppError(
+            "INVALID_RESULT",
+            "Actualizaciones de Telegram no válidas.",
+            502,
+          );
+        for (const raw of updates) {
+          const update = object(raw);
+          if (
+            !Number.isSafeInteger(update.update_id) ||
+            Number(update.update_id) < 0
+          )
+            throw new AppError(
+              "INVALID_RESULT",
+              "Identificador de actualización no válido.",
+              502,
+            );
+          if (Number(update.update_id) < cursor) continue;
+          cursor = Number(update.update_id) + 1;
+          await this.store.run(
+            "UPDATE telegram_state SET cursor=? WHERE id=? AND request_id=?",
+            cursor,
+            key,
+            input.requestId,
+          );
+          const m = object(update.message),
+            from = object(m.from),
+            chat = object(m.chat),
+            reply = object(m.reply_to_message);
+          if (
+            from.id !== this.target ||
+            from.is_bot !== true ||
+            chat.id !== this.target ||
+            chat.type !== "private" ||
+            reply.message_id !== sent.message_id ||
+            typeof m.text !== "string" ||
+            !validId(m.message_id)
+          )
+            continue;
+          try {
+            const result = parseTelegramResult(
+              m.text,
+              input.requestId,
+              input.phone,
+              this.config,
+            );
+            await alive();
+            return result;
+          } catch (e) {
+            if (!(e instanceof AppError) || e.code !== "PARTIAL") throw e;
+          }
+        }
+        // Empty/instant replies must not turn into a busy polling loop.
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => {
+            clearTimeout(timer);
+            reject(timeout());
+          };
+          const timer = setTimeout(() => {
+            input.signal.removeEventListener("abort", abort);
+            resolve();
+          }, 300);
+          if (input.signal.aborted) abort();
+          else input.signal.addEventListener("abort", abort, { once: true });
+        });
+      }
+      throw timeout();
+    } catch (e) {
+      if (e instanceof TelegramRateError)
+        await this.store.run(
+          "UPDATE telegram_state SET cooldown_until=? WHERE id=? AND request_id=?",
+          Date.now() + e.retryAfter * 1000,
+          key,
+          input.requestId,
+        );
+      throw e;
+    } finally {
+      await this.store.run(
+        "UPDATE telegram_state SET request_id=NULL,lease=0,cooldown_until=MAX(cooldown_until,?) WHERE id=? AND request_id=?",
+        Date.now() + 1000,
+        key,
+        input.requestId,
+      );
+    }
+  }
+}

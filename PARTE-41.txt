@@ -1,0 +1,1024 @@
+t { Store, type Database } from "../lib/server/store.ts";
+import { digest, type QueryResult } from "../lib/domain.ts";
+import type { Provider, ProviderInput } from "../lib/server/providers.ts";
+function fixture(provider?: Provider, timeout = 200) {
+  const db = new DatabaseSync(":memory:");
+  db.exec(
+    readFileSync(
+      new URL("../drizzle/0000_bouncy_scalphunter.sql", import.meta.url),
+      "utf8",
+    ),
+  );
+  const adapter: Database = {
+    prepare(sql) {
+      let args: unknown[] = [];
+      const stmt = db.prepare(sql);
+      return {
+        bind(...values: unknown[]) {
+          args = values;
+          return this;
+        },
+        async first<T>() {
+          return (stmt.get(...(args as (string | number | null)[])) ??
+            null) as T | null;
+        },
+        async all<T>() {
+          return {
+            results: stmt.all(...(args as (string | number | null)[])) as T[],
+          };
+        },
+        async run() {
+          return stmt.run(...(args as (string | number | null)[]));
+        },
+      };
+    },
+  };
+  return {
+    db,
+    service: new Service(new Store(adapter), {}, provider, timeout),
+  };
+}
+function deferredProvider() {
+  let calls = 0,
+    resolve!: (value: QueryResult) => void;
+  let input!: ProviderInput;
+  const provider: Provider = {
+    mode: "demo",
+    lookup(i) {
+      calls++;
+      input = i;
+      return new Promise((r) => {
+        resolve = r;
+      });
+    },
+  };
+  return {
+    provider,
+    get calls() {
+      return calls;
+    },
+    get input() {
+      return input;
+    },
+    finish(found = true) {
+      resolve({
+        requestId: input.requestId,
+        phone: input.phone,
+        final: true,
+        found,
+        ...(found ? { country: "España", name: "Persona inventada" } : {}),
+      });
+    },
+  };
+}
+async function body(sessionId: string, text = "600 000-001") {
+  return {
+    sessionId,
+    requestId: crypto.randomUUID(),
+    noteId: crypto.randomUUID(),
+    text,
+    revision: await digest(text),
+  };
+}
+const tick = () => new Promise((r) => setTimeout(r, 8));
+test("consulta autorizada, duplicados bloqueados y metadatos sin resultado ni teléfono", async () => {
+  const p = deferredProvider(),
+    { service, db } = fixture(p.provider);
+  const s = await service.start("artist", { participantIds: ["demo-alba"] });
+  const b = await body(s.id);
+  const first = service.query("artist", b, s.csrf);
+  await tick();
+  await assert.rejects(
+    service.query("artist", b, s.csrf),
+    /petición ya se recibió/,
+  );
+  assert.equal(p.calls, 1);
+  p.finish();
+  const r = await first;
+  assert.equal(r.result?.name, "Persona inventada");
+  assert.equal(r.noteId, b.noteId);
+  await assert.rejects(
+    service.query("artist", b, s.csrf),
+    /petición ya se recibió/,
+  );
+  const rows = JSON.stringify(db.prepare("SELECT * FROM queries").all());
+  assert.ok(!rows.includes("600000001"));
+  assert.ok(!rows.includes("Persona inventada"));
+  assert.ok(!rows.includes("country"));
+});
+test("bloquea otros artistas, CSRF incorrecto, titular no seleccionado y revisión falsa antes de proveedor", async () => {
+  const p = deferredProvider(),
+    { service } = fixture(p.provider),
+    s = await service.start("artist", { participantIds: ["demo-alba"] }),
+    b = await body(s.id);
+  await assert.rejects(service.query("another", b, s.csrf), /Sesión caducada/);
+  await assert.rejects(service.query("artist", b, "forged"), /Verificación/);
+  await assert.rejects(
+    service.query("artist", await body(s.id, "700000002"), s.csrf),
+    /no está autorizado/,
+  );
+  await assert.rejects(
+    service.query("artist", await body(s.id, "611111111"), s.csrf),
+    /no está autorizado/,
+  );
+  await assert.rejects(
+    service.query("artist", { ...b, revision: "0".repeat(64) }, s.csrf),
+    /revisión no coincide/,
+  );
+  assert.equal(p.calls, 0);
+});
+test("serializa peticiones concurrentes por sesión", async () => {
+  const p = deferredProvider(),
+    { service } = fixture(p.provider),
+    s = await service.start("artist", { participantIds: ["demo-alba"] });
+  const a = service.query("artist", await body(s.id), s.csrf);
+  await tick();
+  await assert.rejects(
+    service.query("artist", await body(s.id), s.csrf),
+    /consulta pendiente/,
+  );
+  p.finish();
+  await a;
+  assert.equal(p.calls, 1);
+});
+test("borrar o reiniciar sesión descarta respuesta en curso", async () => {
+  const p = deferredProvider(),
+    { service, db } = fixture(p.provider),
+    s = await service.start("artist", { participantIds: ["demo-alba"] });
+  const a = service.query("artist", await body(s.id), s.csrf);
+  await tick();
+  await service.start("artist", { participantIds: ["demo-alba"] });
+  p.finish();
+  await assert.rejects(a, /sesión cambió/);
+  assert.equal(db.prepare("SELECT * FROM queries").all().length, 0);
+});
+test("timeout con respuesta tardía no cambia el estado ni reenvía", async () => {
+  const p = deferredProvider(),
+    { service, db } = fixture(p.provider, 25),
+    s = await service.start("artist", { participantIds: ["demo-alba"] });
+  await assert.rejects(
+    service.query("artist", await body(s.id), s.csrf),
+    /Tiempo de espera/,
+  );
+  p.finish();
+  await tick();
+  assert.equal(
+    db.prepare("SELECT status FROM queries").get()?.status,
+    "tiempo agotado",
+  );
+  assert.equal(p.calls, 1);
+});
+test("sin resultado y errores de red liberan la sesión", async () => {
+  const p = deferredProvider(),
+    { service, db } = fixture(p.provider),
+    s = await service.start("artist", { participantIds: ["demo-alba"] });
+  const a = service.query("artist", await body(s.id), s.csrf);
+  await tick();
+  p.finish(false);
+  assert.equal((await a).status, "sin resultado");
+  assert.equal(
+    db.prepare("SELECT active_query FROM sessions").get()?.active_query,
+    null,
+  );
+  const network = fixture({
+    mode: "demo",
+    async lookup() {
+      throw new Error("secret phone private provider error");
+    },
+  });
+  const t = await network.service.start("artist", {
+    participantIds: ["demo-alba"],
+  });
+  await assert.rejects(
+    network.service.query("artist", await body(t.id), t.csrf),
+    /No se pudo contactar/,
+  );
+  assert.ok(
+    !JSON.stringify(network.db.prepare("SELECT * FROM queries").all()).includes(
+      "secret",
+    ),
+  );
+});
+test("límites persistentes por artista y sesión", async () => {
+  const { service } = fixture();
+  for (let i = 0; i < 20; i++) await service.rate("artist", "query", 20);
+  await assert.rejects(service.rate("artist", "query", 20), /Límite alcanzado/);
+  const s = await service.start("second-artist", {
+    participantIds: ["demo-alba"],
+  });
+  await service.store.run(
+    "UPDATE sessions SET query_count=10 WHERE id=?",
+    s.id,
+  );
+  await assert.rejects(
+    service.query("second-artist", await body(s.id), s.csrf),
+    /límite de sesión/,
+  );
+});
+
+===== FIN: tests/service.test.ts =====
+
+
+===== ARCHIVO: tests/telegram.test.ts =====
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
+import { readFileSync } from "node:fs";
+import {
+  TelegramProvider,
+  parseTelegramResult,
+} from "../lib/server/telegram.ts";
+import { Store, type Database } from "../lib/server/store.ts";
+import { Service } from "../lib/server/service.ts";
+import { digest } from "../lib/domain.ts";
+
+const config = {
+  PROVIDER_MODE: "real",
+  PROVIDER_TRANSPORT: "telegram",
+  PROVIDER_AUTHORIZED: "true",
+  TELEGRAM_BOT_TOKEN: "12345:test-only-secret",
+  TELEGRAM_TARGET_BOT_ID: "54321",
+  TELEGRAM_TARGET_USERNAME: "TrueCalleRobot",
+  TELEGRAM_PROTOCOL_CONFIRMED: "true",
+  TELEGRAM_FINAL_SUFFIX: "END OF RESULT",
+  TELEGRAM_NO_RESULT_TEXT: "NO RESULT",
+};
+const phone = "+34600000001";
+const text = `Number: ${phone}\nCountry: Spain\nCarrier: Operador ficticio\nName: Persona ficticia\nEND OF RESULT`;
+function fixture() {
+  const db = new DatabaseSync(":memory:");
+  for (const file of [
+    "0000_bouncy_scalphunter.sql",
+    "0001_robust_thunderball.sql",
+  ])
+    db.exec(
+      readFileSync(new URL(`../drizzle/${file}`, import.meta.url), "utf8"),
+    );
+  const database: Database = {
+    prepare(sql) {
+      const stmt = db.prepare(sql);
+      let args: unknown[] = [];
+      return {
+        bind(...values: unknown[]) {
+          args = values;
+          return this;
+        },
+        async first<T>() {
+          return (stmt.get(...(args as (string | number | null)[])) ??
+            null) as T | null;
+        },
+        async all<T>() {
+          return {
+            results: stmt.all(...(args as (string | number | null)[])) as T[],
+          };
+        },
+        async run() {
+          return stmt.run(...(args as (string | number | null)[]));
+        },
+      };
+    },
+  };
+  return { db, store: new Store(database) };
+}
+const ok = (result: unknown) => Response.json({ ok: true, result });
+const reply = (
+  id = 7,
+  replyId = 40,
+  body = text,
+  sender = 54321,
+  chat = 54321,
+) => ({
+  update_id: id,
+  message: {
+    message_id: id,
+    from: { id: sender, is_bot: true },
+    chat: { id: chat, type: "private" },
+    reply_to_message: { message_id: replyId },
+    text: body,
+  },
+});
+function input(signal = new AbortController().signal) {
+  return {
+    requestId: crypto.randomUUID(),
+    phone,
+    sessionId: crypto.randomUUID(),
+    signal,
+  };
+}
+function harness(updates: unknown[][] = [[reply()]]) {
+  const calls: { method: string; body: Record<string, unknown> }[] = [];
+  const fetcher = async (url: string | URL | Request, init?: RequestInit) => {
+    const method = String(url).split("/").at(-1)!;
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    calls.push({ method, body });
+    if (method === "getMe") return ok({ id: 12345, is_bot: true });
+    if (method === "getWebhookInfo") return ok({ url: "" });
+    if (method === "getChat")
+      return ok({ id: 54321, type: "private", username: "TrueCalleRobot" });
+    if (method === "sendMessage")
+      return ok({ message_id: 40, chat: { id: 54321, type: "private" } });
+    if (method === "getUpdates") return ok(updates.shift() ?? []);
+    throw Error("unexpected method");
+  };
+  return { calls, fetcher };
+}
+test("Telegram resuelve el bot por username antes de verificar su ID estable", async () => {
+  const { store } = fixture();
+  const h = harness();
+  const provider = new TelegramProvider(config, store, h.fetcher);
+  await provider.check(new AbortController().signal);
+  assert.equal(
+    h.calls.find((call) => call.method === "getChat")?.body.chat_id,
+    "@TrueCalleRobot",
+  );
+});
+test("Telegram requiere configuración y permiso; parsea texto ficticio, rechaza parcial, número distinto y campos duplicados", () => {
+  const { store } = fixture();
+  assert.throws(() => new TelegramProvider({}, store), /configuración/);
+  const r = parseTelegramResult(text, "request", phone, config);
+  assert.equal(r.name, "Persona ficticia");
+  assert.equal(
+    parseTelegramResult(`Number: ${phone}\nNO RESULT`, "request", phone, config)
+      .found,
+    false,
+  );
+  assert.throws(
+    () =>
+      parseTelegramResult(
+        text.replace("END OF RESULT", ""),
+        "request",
+        phone,
+        config,
+      ),
+    /parcial/,
+  );
+  assert.throws(
+    () =>
+      parseTelegramResult(
+        text.replace(phone, "+34700000002"),
+        "request",
+        phone,
+        config,
+      ),
+    /corresponde/,
+  );
+  assert.throws(
+    () =>
+      parseTelegramResult(
+        text.replace("Name:", "Name: X\nName:"),
+        "request",
+        phone,
+        config,
+      ),
+    /duplicado/,
+  );
+  assert.equal(
+    parseTelegramResult(
+      text.replace("Persona ficticia", "<script>evil()</script>"),
+      "request",
+      phone,
+      config,
+    ).name,
+    "<script>evil()</script>",
+  );
+});
+test("Telegram envía +34 una sola vez y acepta únicamente respuesta correlacionada de origen/conversación fijados", async () => {
+  const { store, db } = fixture(),
+    h = harness([
+      [
+        reply(1, 39),
+        reply(2, 40, text, 999),
+        reply(3, 40, text, 54321, 999),
+        reply(4),
+      ],
+    ]);
+  const p = new TelegramProvider(config, store, h.fetcher),
+    i = input();
+  const r = await p.lookup(i);
+  assert.equal(r.requestId, i.requestId);
+  assert.equal(r.phone, phone);
+  assert.equal(h.calls.filter((c) => c.method === "sendMessage").length, 1);
+  assert.equal(
+    h.calls.find((c) => c.method === "sendMessage")?.body.text,
+    phone,
+  );
+  assert.equal(
+    h.calls.find((c) => c.method === "sendMessage")?.body.chat_id,
+    54321,
+  );
+  const persisted = JSON.stringify(
+    db.prepare("SELECT * FROM telegram_state").all(),
+  );
+  assert.ok(
+    !persisted.includes(phone) &&
+      !persisted.includes("Persona ficticia") &&
+      !persisted.includes(config.TELEGRAM_BOT_TOKEN),
+  );
+});
+test("Telegram bloqueo global abarca distintas instancias; un segundo artista no envía mientras está pendiente", async () => {
+  const { store } = fixture(),
+    h = harness();
+  let resolve!: (r: Response) => void;
+  const blocked = async (url: string | URL | Request, init?: RequestInit) =>
+    String(url).endsWith("getUpdates")
+      ? new Promise<Response>((r) => {
+          resolve = r;
+        })
+      : h.fetcher(url, init);
+  const p = new TelegramProvider(config, store, blocked),
+    i = input();
+  const pending = p.lookup(i);
+  while (!resolve) await new Promise((r) => setTimeout(r, 1));
+  await assert.rejects(
+    new TelegramProvider(config, store, h.fetcher).lookup(input()),
+    /pendiente/,
+  );
+  await assert.rejects(
+    new TelegramProvider(
+      { ...config, TELEGRAM_BOT_TOKEN: "12345:rotated-test-secret" },
+      store,
+      h.fetcher,
+    ).lookup(input()),
+    /pendiente/,
+  );
+  resolve(ok([reply()]));
+  await pending;
+  assert.equal(h.calls.filter((c) => c.method === "sendMessage").length, 1);
+});
+test("Telegram rechaza webhook activo y destinatario distinto antes de transmitir un teléfono", async () => {
+  for (const method of ["getWebhookInfo", "getChat"]) {
+    const { store } = fixture(),
+      h = harness();
+    const f = async (url: string | URL | Request, init?: RequestInit) =>
+      String(url).endsWith(method)
+        ? ok(
+            method === "getChat"
+              ? { id: 888, type: "private", username: "OtherBot" }
+              : { url: "https://other.example/webhook" },
+          )
+        : h.fetcher(url, init);
+    await assert.rejects(
+      new TelegramProvider(config, store, f).lookup(input()),
+    );
+    assert.equal(h.calls.filter((c) => c.method === "sendMessage").length, 0);
+  }
+});
+test("Telegram 429 conserva cooldown y no repite el envío; errores no filtran descripción ni token", async () => {
+  const { store, db } = fixture(),
+    h = harness();
+  const f = async (url: string | URL | Request, init?: RequestInit) =>
+    String(url).endsWith("sendMessage")
+      ? Response.json(
+          {
+            ok: false,
+            error_code: 429,
+            description: config.TELEGRAM_BOT_TOKEN,
+            parameters: { retry_after: 60 },
+          },
+          { status: 429 },
+        )
+      : h.fetcher(url, init);
+  await assert.rejects(
+    new TelegramProvider(config, store, f).lookup(input()),
+    (e: Error) => !e.message.includes(config.TELEGRAM_BOT_TOKEN),
+  );
+  await assert.rejects(
+    new TelegramProvider(config, store, h.fetcher).lookup(input()),
+    /espera/,
+  );
+  assert.ok(
+    (
+      db.prepare("SELECT cooldown_until FROM telegram_state").get() as {
+        cooldown_until: number;
+      }
+    ).cooldown_until > Date.now(),
+  );
+});
+test("Telegram tras abortar descarta una respuesta tardía y libera el bloqueo sin responder al proveedor", async () => {
+  const { store, db } = fixture(),
+    h = harness();
+  let resolve!: (r: Response) => void;
+  const f = async (url: string | URL | Request, init?: RequestInit) =>
+    String(url).endsWith("getUpdates")
+      ? new Promise<Response>((r) => {
+          resolve = r;
+        })
+      : h.fetcher(url, init);
+  const controller = new AbortController();
+  const pending = new TelegramProvider(config, store, f).lookup(
+    input(controller.signal),
+  );
+  while (!resolve) await new Promise((r) => setTimeout(r, 1));
+  controller.abort();
+  resolve(ok([reply()]));
+  await assert.rejects(pending, /agotado/);
+  assert.equal(
+    (
+      db.prepare("SELECT request_id FROM telegram_state").get() as {
+        request_id: null;
+      }
+    ).request_id,
+    null,
+  );
+  assert.equal(h.calls.filter((c) => c.method === "sendMessage").length, 1);
+});
+test("Telegram ignora mensajes parciales y duplicados; un error de capacidad no filtra descripción ni reintenta", async () => {
+  const { store } = fixture(),
+    h = harness([
+      [reply(1, 40, text.replace("END OF RESULT", "")), reply(1), reply(2)],
+    ]);
+  assert.equal(
+    (await new TelegramProvider(config, store, h.fetcher).lookup(input())).name,
+    "Persona ficticia",
+  );
+  const { store: nextStore } = fixture(),
+    next = harness();
+  let sends = 0;
+  const f = async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).endsWith("sendMessage")) {
+      sends++;
+      return Response.json(
+        {
+          ok: false,
+          error_code: 400,
+          description: `USER_BOT_TO_BOT_DISABLED ${config.TELEGRAM_BOT_TOKEN}`,
+        },
+        { status: 400 },
+      );
+    }
+    return next.fetcher(url, init);
+  };
+  await assert.rejects(
+    new TelegramProvider(config, nextStore, f).lookup(input()),
+    (e: Error & { code?: string }) =>
+      e.code === "TELEGRAM_BOT_TO_BOT_DISABLED" &&
+      !e.message.includes(config.TELEGRAM_BOT_TOKEN),
+  );
+  assert.equal(sends, 1);
+});
+test("Servicio Telegram comprueba autorización antes de enviar y correlaciona la ficha con nota, revisión y sesión", async () => {
+  const { store, db } = fixture(),
+    h = harness();
+  const realConfig = {
+    ...config,
+    AUTHORIZED_PARTICIPANTS_JSON: JSON.stringify([
+      {
+        id: "fictional-holder",
+        label: "Ficha ficticia",
+        phone,
+        artistId: "artist",
+        consentRef: "fictional-evidence",
+        ownershipVerifiedAt: new Date(Date.now() - 1000).toISOString(),
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        scope: "lookup",
+        provider: "telegram:@TrueCalleRobot:54321",
+      },
+    ]),
+  };
+  const service = new Service(
+    store,
+    realConfig,
+    new TelegramProvider(realConfig, store, h.fetcher),
+  );
+  const session = await service.start("artist", {
+    participantIds: ["fictional-holder"],
+  });
+  const makeBody = async (text: string) => ({
+    sessionId: session.id,
+    requestId: crypto.randomUUID(),
+    noteId: crypto.randomUUID(),
+    text,
+    revision: await digest(text),
+  });
+  await assert.rejects(
+    service.query("artist", await makeBody("700000002"), session.csrf),
+    /no está autorizado/,
+  );
+  assert.equal(h.calls.length, 0);
+  const body = await makeBody("600 000-001");
+  const result = await service.query("artist", body, session.csrf);
+  assert.equal(result.noteId, body.noteId);
+  assert.equal(result.revision, body.revision);
+  assert.equal(result.sessionId, session.id);
+  assert.equal(result.result?.name, "Persona ficticia");
+  await assert.rejects(
+    service.query("artist", body, session.csrf),
+    /ya se recibió/,
+  );
+  assert.equal(h.calls.filter((c) => c.method === "sendMessage").length, 1);
+  const rows = JSON.stringify(db.prepare("SELECT * FROM queries").all());
+  assert.ok(!rows.includes(phone) && !rows.includes("Persona ficticia"));
+});
+
+===== FIN: tests/telegram.test.ts =====
+
+
+===== ARCHIVO: tsconfig.json =====
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    },
+    "types": [
+      "node",
+      "@cloudflare/workers-types"
+    ],
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "**/*.mts"
+  ],
+  "exclude": [
+    "node_modules",
+    "examples",
+    "bridge"
+  ]
+}
+
+===== FIN: tsconfig.json =====
+
+
+===== ARCHIVO: vendor/shadcn-tailwind-4.13.0.LICENSE.md =====
+MIT License
+
+Copyright (c) 2023 shadcn
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+===== FIN: vendor/shadcn-tailwind-4.13.0.LICENSE.md =====
+
+
+===== ARCHIVO: vendor/shadcn-tailwind-4.13.0.css =====
+@theme inline {
+  @keyframes accordion-down {
+    from {
+      height: 0;
+    }
+    to {
+      height: var(
+        --radix-accordion-content-height,
+        var(--accordion-panel-height, auto)
+      );
+    }
+  }
+
+  @keyframes accordion-up {
+    from {
+      height: var(
+        --radix-accordion-content-height,
+        var(--accordion-panel-height, auto)
+      );
+    }
+    to {
+      height: 0;
+    }
+  }
+}
+
+/* Custom variants */
+@custom-variant data-open {
+  &:where([data-state="open"]),
+  &:where([data-open]:not([data-open="false"])) {
+    @slot;
+  }
+}
+
+@custom-variant data-closed {
+  &:where([data-state="closed"]),
+  &:where([data-closed]:not([data-closed="false"])) {
+    @slot;
+  }
+}
+
+@custom-variant data-checked {
+  &:where([data-state="checked"]),
+  &:where([data-checked]:not([data-checked="false"])) {
+    @slot;
+  }
+}
+
+@custom-variant data-unchecked {
+  &:where([data-state="unchecked"]),
+  &:where([data-unchecked]:not([data-unchecked="false"])) {
+    @slot;
+  }
+}
+
+@custom-variant data-selected {
+  &:where([data-selected="true"]) {
+    @slot;
+  }
+}
+
+@custom-variant data-disabled {
+  &:where([data-disabled="true"]),
+  &:where([data-disabled]:not([data-disabled="false"])) {
+    @slot;
+  }
+}
+
+@custom-variant data-active {
+  &:where([data-state="active"]),
+  &:where([data-active]:not([data-active="false"])) {
+    @slot;
+  }
+}
+
+@custom-variant data-horizontal {
+  &:where([data-orientation="horizontal"]) {
+    @slot;
+  }
+}
+
+@custom-variant data-vertical {
+  &:where([data-orientation="vertical"]) {
+    @slot;
+  }
+}
+
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* scroll-fade */
+@property --scroll-fade-t {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-b {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-s {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-e {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-mask {
+  syntax: "*";
+  inherits: false;
+}
+
+@theme inline {
+  @keyframes scroll-fade-reveal-t {
+    from {
+      --scroll-fade-t: 0px;
+    }
+    to {
+      --scroll-fade-t: var(--_scroll-fade-size-t, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+  }
+  @keyframes scroll-fade-reveal-b {
+    from {
+      --scroll-fade-b: var(--_scroll-fade-size-b, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+    to {
+      --scroll-fade-b: 0px;
+    }
+  }
+  @keyframes scroll-fade-reveal-s {
+    from {
+      --scroll-fade-s: 0px;
+    }
+    to {
+      --scroll-fade-s: var(--_scroll-fade-size-s, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+  }
+  @keyframes scroll-fade-reveal-e {
+    from {
+      --scroll-fade-e: var(--_scroll-fade-size-e, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+    }
+    to {
+      --scroll-fade-e: 0px;
+    }
+  }
+}
+
+@utility scroll-fade {
+  --_scroll-fade-size-t: var(
+    --scroll-fade-t-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --_scroll-fade-size-b: var(
+    --scroll-fade-b-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-block: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 calc(100% - var(--scroll-fade-b, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
+  mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-t 1ms ease-in-out,
+      scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y), scroll(self y);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--_scroll-fade-size-t);
+    --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+}
+
+@utility scroll-fade-y {
+  --_scroll-fade-size-t: var(
+    --scroll-fade-t-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --_scroll-fade-size-b: var(
+    --scroll-fade-b-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-block: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 calc(100% - var(--scroll-fade-b, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
+  mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-t 1ms ease-in-out,
+      scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y), scroll(self y);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--_scroll-fade-size-t);
+    --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+}
+
+@utility scroll-fade-x {
+  --_scroll-fade-size-s: var(
+    --scroll-fade-s-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --_scroll-fade-size-e: var(
+    --scroll-fade-e-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-inline: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--scroll-fade-s, 0px),
+    #000 calc(100% - var(--scroll-fade-e, 0px)),
+    transparent 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --scroll-fade-inline: linear-gradient(
+      to left,
+      transparent 0,
+      #000 var(--scroll-fade-s, 0px),
+      #000 calc(100% - var(--scroll-fade-e, 0px)),
+      transparent 100%
+    );
+  }
+  -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-inline));
+  mask-image: var(--scroll-fade-mask, var(--scroll-fade-inline));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-s 1ms ease-in-out,
+      scroll-fade-reveal-e 1ms ease-in-out;
+    animation-timeline: scroll(self inline), scroll(self inline);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-s: var(--_scroll-fade-size-s);
+    --scroll-fade-e: var(--_scroll-fade-size-e);
+  }
+}
+
+@utility scroll-fade-t {
+  --_scroll-fade-size-t: var(
+    --scroll-fade-t-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-t 1ms ease-in-out;
+    animation-timeline: scroll(self y);
+    animation-range: 0 var(--scroll-fade-reveal, calc(var(--spacing) * 24));
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--_scroll-fade-size-t);
+  }
+}
+
+@utility scroll-fade-b {
+  --_scroll-fade-size-b: var(
+    --scroll-fade-b-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 calc(100% - var(--scroll-fade-b, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-

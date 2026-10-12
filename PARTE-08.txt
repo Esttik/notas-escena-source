@@ -1,0 +1,981 @@
+ refreshDates] = useState(0);
+  useEffect(() => {
+    const refresh = () => refreshDates((n) => n + 1);
+    const timer = setInterval(refresh, 60000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
+  const found = findNotes(notes, search);
+  return (
+    <section className="list-screen">
+      <header className="list-header">
+        <button className="round" aria-label="Carpetas" onClick={folders}>
+          <Icon name="back" />
+        </button>
+        <div className="list-heading">
+          <h1>Notas</h1>
+          <p>
+            {notes.length} {notes.length === 1 ? "nota" : "notas"}
+          </p>
+        </div>
+        <button
+          className="round"
+          aria-label="Menú y área del artista"
+          onClick={artist}
+        >
+          <Icon name="more" />
+        </button>
+      </header>
+      <div className="note-groups">
+        {groups(found).map(([label, items]) => (
+          <section className="note-section" key={label}>
+            <div className="section-heading">
+              <h2>{label}</h2>
+              {label === "Fijadas" && (
+                <button
+                  aria-label={folded ? "Mostrar fijadas" : "Ocultar fijadas"}
+                  aria-expanded={!folded}
+                  className={`collapse ${folded ? "folded" : ""}`}
+                  onClick={() => setFolded(!folded)}
+                >
+                  <Icon name="chevron" />
+                </button>
+              )}
+            </div>
+            {!(label === "Fijadas" && folded) && (
+              <div className="note-card">
+                {items.map((n) => (
+                  <NoteRow
+                    key={n.id}
+                    note={n}
+                    open={() => open(n.id)}
+                    remove={() => remove(n.id)}
+                    pin={() => pin(n.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        ))}
+        {!found.length && (
+          <p className="empty">
+            {search ? "No se encontraron notas." : "Todavía no hay notas."}
+          </p>
+        )}
+      </div>
+      <footer className="list-bottom">
+        <label className="search-pill">
+          <Icon name="search" />
+          <input
+            type="search"
+            placeholder="Buscar"
+            aria-label="Buscar notas"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {search && (
+            <button aria-label="Limpiar búsqueda" onClick={() => setSearch("")}>
+              <Icon name="close" />
+            </button>
+          )}
+        </label>
+        <button
+          className="round compose"
+          aria-label="Crear nueva nota"
+          onClick={create}
+        >
+          <Icon name="compose" />
+        </button>
+      </footer>
+    </section>
+  );
+}
+
+function NoteRow({
+  note,
+  open,
+  remove,
+  pin,
+}: {
+  note: Note;
+  open: () => void;
+  remove: () => void;
+  pin: () => void;
+}) {
+  const [action, setAction] = useState<"pin" | "delete" | null>(null);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const dragged = useRef(false);
+  useEffect(() => {
+    if (!action) return;
+    const close = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAction(null);
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [action]);
+  return (
+    <div className={`swipe-row ${action ? `show-${action}` : ""}`}>
+      {action && (
+        <button
+          className={`swipe-action ${action === "delete" ? "danger" : ""}`}
+          aria-label={
+            action === "delete"
+              ? `Eliminar ${title(note)}`
+              : `${note.pinned ? "Desfijar" : "Fijar"} ${title(note)}`
+          }
+          onClick={() => {
+            (action === "delete" ? remove : pin)();
+            setAction(null);
+          }}
+        >
+          <Icon name={action === "delete" ? "trash" : "pin"} />
+          <span>
+            {action === "delete"
+              ? "Eliminar"
+              : note.pinned
+                ? "Desfijar"
+                : "Fijar"}
+          </span>
+        </button>
+      )}
+      <button
+        className="note-row"
+        aria-expanded={!!action}
+        onPointerDown={(e) => {
+          start.current = { x: e.clientX, y: e.clientY };
+          dragged.current = false;
+        }}
+        onPointerMove={(e) => {
+          const p = start.current;
+          if (!p) return;
+          const dx = e.clientX - p.x,
+            dy = e.clientY - p.y;
+          if (Math.abs(dy) > 24 && Math.abs(dy) > Math.abs(dx)) {
+            start.current = null;
+            return;
+          }
+          if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+            dragged.current = true;
+            setAction(dx < 0 ? "delete" : "pin");
+          }
+        }}
+        onPointerUp={() => {
+          start.current = null;
+        }}
+        onPointerCancel={() => {
+          start.current = null;
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setAction(action ? null : "delete");
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Delete") {
+            e.preventDefault();
+            setAction("delete");
+          }
+          if (e.key === "ArrowRight") {
+            e.preventDefault();
+            setAction("pin");
+          }
+        }}
+        onClick={() => {
+          if (dragged.current) return;
+          if (action) setAction(null);
+          else open();
+        }}
+      >
+        <span className="row-title">{title(note)}</span>
+        <span className="row-excerpt">
+          <time>{dateLabel(note.updated)}</time> {excerpt(note)}
+        </span>
+      </button>
+    </div>
+  );
+}
+
+===== FIN: components/NoteList.tsx =====
+
+
+===== ARCHIVO: components/NotesApp.tsx =====
+"use client";
+import { useEffect, useRef, useState } from "react";
+import { api, type Config, type Session } from "../lib/client/api";
+import {
+  loadNotes,
+  persistNotes,
+  deleteNote,
+  NoteConflict,
+  restoreNote,
+  type Note,
+} from "../lib/client/notes";
+import {
+  canInsert,
+  digest,
+  formatResult,
+  normalizePhone,
+  validateResult,
+  type Context,
+  type QueryResult,
+} from "../lib/domain";
+import { Artist } from "./Artist";
+import { Editor } from "./Editor";
+import { NoteList } from "./NoteList";
+import { Trash } from "./Trash";
+import { useKeyboardViewport } from "../lib/client/use-keyboard-viewport";
+import { Icon } from "./Icon";
+import { AutomaticLookup, eligiblePhone } from "../lib/client/automatic-lookup";
+type Screen = "notes" | "artist" | "folders" | "trash";
+type Reply = {
+  requestId: string;
+  sessionId: string;
+  noteId: string;
+  revision: string;
+  phone: string;
+  status: string;
+  result: QueryResult | null;
+  providerMs: number;
+};
+export function NotesApp() {
+  const [notes, renderNotes] = useState<Note[]>([]),
+    [ready, setReady] = useState(false),
+    [active, setActive] = useState<string | null>(null),
+    [screen, renderScreen] = useState<Screen>("notes"),
+    [config, setConfig] = useState<Config | null>(null),
+    [session, setSession] = useState<Session | null>(null),
+    [status, setStatus] = useState("preparado"),
+    [detail, setDetail] = useState(""),
+    [pending, setPending] = useState(false),
+    [peek, setPeek] = useState<string | null>(null),
+    [metrics, setMetrics] = useState<{
+      ui: number;
+      provider: number | null;
+    } | null>(null),
+    [notice, setNotice] = useState("");
+  const hydrated = useRef(false);
+  const screenRef = useRef<Screen>(screen);
+  screenRef.current = screen;
+  const notesRef = useRef(notes),
+    activeRef = useRef(active),
+    sessionRef = useRef(session),
+    revision = useRef(0),
+    generation = useRef(0),
+    busy = useRef(false),
+    controller = useRef<AbortController | null>(null),
+    dirty = useRef(false),
+    lookup = useRef(new AutomaticLookup()),
+    allowedPhones = useRef(new Set<string>()),
+    queryRef = useRef<(automatic: boolean) => Promise<void>>(async () => {});
+  useKeyboardViewport();
+  const [search, setSearch] = useState("");
+  const [folded, setFolded] = useState(false);
+  const listScroll = useRef(0);
+  function setNotes(update: Note[] | ((ns: Note[]) => Note[])) {
+    let next = typeof update === "function" ? update(notesRef.current) : update;
+    const oldOrdinary = notesRef.current.filter((n) => !n.volatile);
+    const ordinary = next.filter((n) => !n.volatile);
+    if (
+      ordinary.length !== oldOrdinary.length ||
+      ordinary.some((n, i) => n !== oldOrdinary[i])
+    ) {
+      try {
+        const saved = persistNotes(
+          next,
+          hydrated.current ? oldOrdinary : undefined,
+        );
+        next = [...saved, ...next.filter((n) => n.volatile)];
+      } catch (error) {
+        setNotice(
+          error instanceof NoteConflict
+            ? error.message
+            : "No se pudieron guardar las notas. Libera espacio antes de cerrar la app.",
+        );
+      }
+    }
+    notesRef.current = next;
+    renderNotes(next);
+  }
+  function setScreen(next: Screen) {
+    if (screenRef.current !== next) {
+      history.pushState(
+        { notasEscena: { screen: next, active: activeRef.current } },
+        "",
+      );
+      screenRef.current = next;
+      renderScreen(next);
+      lookup.current.release();
+      setPeek(null);
+      window.scrollTo(0, 0);
+    }
+  }
+  useEffect(() => {
+    history.replaceState(
+      { notasEscena: { screen: "notes", active: null } },
+      "",
+    );
+    const pop = (event: PopStateEvent) => {
+      const destination = event.state?.notasEscena;
+      const nextScreen: Screen = [
+        "notes",
+        "artist",
+        "folders",
+        "trash",
+      ].includes(destination?.screen)
+        ? destination.screen
+        : "notes";
+      const candidate = notesRef.current.find(
+        (n) => n.id === destination?.active && !n.deleted,
+      );
+      const nextActive =
+        candidate && (!sessionRef.current || candidate.volatile)
+          ? candidate.id
+          : null;
+      if (activeRef.current !== nextActive) {
+        setNotes((ns) =>
+          ns.filter(
+            (n) => n.id !== activeRef.current || n.text.trim().length > 0,
+          ),
+        );
+        revision.current++;
+        generation.current++;
+        lookup.current.discard();
+        setPeek(null);
+      }
+      setActive(nextActive);
+      activeRef.current = nextActive;
+      renderScreen(nextScreen);
+      screenRef.current = nextScreen;
+      if (!nextActive && nextScreen === "notes")
+        requestAnimationFrame(() => window.scrollTo(0, listScroll.current));
+    };
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
+  }, []);
+  activeRef.current = active;
+  sessionRef.current = session;
+  useEffect(() => {
+    let mounted = true;
+    // Hydrate device storage after mounting; keep controls blocked until the
+    // read completes so a newly created note cannot be overwritten.
+    queueMicrotask(() => {
+      if (!mounted) return;
+      setNotes(loadNotes());
+      hydrated.current = true;
+      setReady(true);
+    });
+    api<Config>("config")
+      .then(setConfig)
+      .catch((e) => setNotice(e.message));
+    if ("serviceWorker" in navigator)
+      navigator.serviceWorker
+        .register("/sw.js")
+        .catch(() => setNotice("No se pudo preparar el modo sin conexión."));
+    return () => {
+      mounted = false;
+    };
+  }, []);
+  useEffect(() => {
+    function unload(e: BeforeUnloadEvent) {
+      if (sessionRef.current || dirty.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    }
+    window.addEventListener("beforeunload", unload);
+    return () => window.removeEventListener("beforeunload", unload);
+  }, []);
+  useEffect(() => {
+    if (!session) return;
+    const timer = setTimeout(
+      () => {
+        generation.current++;
+        controller.current?.abort();
+        lookup.current.reset();
+        setPeek(null);
+        allowedPhones.current.clear();
+        setSession(null);
+        sessionRef.current = null;
+        setNotes((ns) => ns.filter((n) => !n.volatile));
+        setActive(null);
+        setStatus("error");
+        setDetail("Sesión caducada; se descartaron las notas de actuación.");
+      },
+      Math.max(0, session.expires - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [session]);
+  function change(text: string) {
+    if (notesRef.current.find((n) => n.id === activeRef.current)?.text === text)
+      return;
+    revision.current++;
+    lookup.current.discard();
+    setPeek(null);
+    if (!busy.current) setStatus("preparado");
+    dirty.current = true;
+    setNotes((ns) =>
+      ns.map((n) =>
+        n.id === activeRef.current
+          ? {
+              ...n,
+              text,
+              updated: Date.now(),
+              volatile: n.volatile || !!sessionRef.current,
+            }
+          : n,
+      ),
+    );
+    if (text.length > 20000)
+      setNotice("La consulta admite notas de hasta 20.000 caracteres.");
+  }
+  function open(id: string) {
+    listScroll.current = window.scrollY;
+    window.scrollTo(0, 0);
+    const original = notesRef.current.find((n) => n.id === id);
+    if (sessionRef.current && original && !original.volatile) {
+      const copy = {
+        ...original,
+        sourceId: original.id,
+        id: crypto.randomUUID(),
+        volatile: true,
+        updated: Date.now(),
+      };
+      setNotes((ns) => [copy, ...ns]);
+      id = copy.id;
+    }
+    revision.current++;
+    generation.current++;
+    lookup.current.discard();
+    setPeek(null);
+    history.pushState({ notasEscena: { screen: "notes", active: id } }, "");
+    setActive(id);
+    activeRef.current = id;
+    setStatus("preparado");
+  }
+  function create() {
+    if (notes.filter((n) => !n.deleted).length >= 200) {
+      setNotice("Límite de 200 notas. Elimina una para continuar.");
+      return;
+    }
+    if (notes.length >= 400) {
+      setNotice(
+        "Vacía algunas notas de Eliminadas recientemente para continuar.",
+      );
+      return;
+    }
+    const note: Note = {
+      id: crypto.randomUUID(),
+      text: "",
+      pinned: false,
+      updated: Date.now(),
+      volatile: !!sessionRef.current,
+    };
+    setNotes((ns) => [note, ...ns]);
+    open(note.id);
+  }
+  function back() {
+    setNotes((ns) =>
+      ns.filter((n) => n.id !== activeRef.current || n.text.trim().length > 0),
+    );
+    generation.current++;
+    revision.current++;
+    lookup.current.discard();
+    setPeek(null);
+    setActive(null);
+    activeRef.current = null;
+    dirty.current = false;
+    history.replaceState(
+      { notasEscena: { screen: "notes", active: null } },
+      "",
+    );
+    requestAnimationFrame(() => window.scrollTo(0, listScroll.current));
+  }
+  function removeNote(id: string) {
+    setNotes((ns) => deleteNote(ns, id));
+    if (activeRef.current === id) back();
+  }
+  function pinNote(id: string) {
+    setNotes((ns) =>
+      ns.map((n) => (n.id === id ? { ...n, pinned: !n.pinned } : n)),
+    );
+  }
+  async function start(ids: string[]) {
+    generation.current++;
+    controller.current?.abort();
+    lookup.current.reset();
+    setPeek(null);
+    allowedPhones.current.clear();
+    const s = await api<Session>("session", { participantIds: ids });
+    allowedPhones.current = new Set(
+      config?.participants
+        .filter((p) => ids.includes(p.id))
+        .map((p) => p.phone) ?? [],
+    );
+    sessionRef.current = s;
+    setSession(s);
+    setNotes((ns) => ns.filter((n) => !n.volatile));
+    setActive(null);
+    activeRef.current = null;
+    setStatus("preparado");
+    setDetail("Sesión autenticada. Crea una nota nueva para la actuación.");
+    setMetrics(null);
+    setScreen("notes");
+  }
+  async function erase() {
+    generation.current++;
+    controller.current?.abort();
+    lookup.current.reset();
+    setPeek(null);
+    allowedPhones.current.clear();
+    await api("erase", {});
+    sessionRef.current = null;
+    setSession(null);
+    setNotes((ns) => ns.filter((n) => !n.volatile));
+    setActive(null);
+    activeRef.current = null;
+    setStatus("preparado");
+    setDetail(
+      "Sesión y metadatos borrados del servidor; notas de actuación descartadas.",
+    );
+    setMetrics(null);
+    dirty.current = false;
+  }
+  function undoResult() {
+    if (!lookup.current.result(currentContext())) return false;
+    lookup.current.discard();
+    setPeek(null);
+    setStatus("preparado");
+    setDetail("Resultado retirado de memoria; el texto de la nota no cambió.");
+    return true;
+  }
+  function currentContext(): Context {
+    return {
+      sessionId: sessionRef.current?.id ?? "",
+      noteId: activeRef.current ?? "",
+      revision: revision.current,
+      generation: generation.current,
+    };
+  }
+  function beginPeek() {
+    if (!sessionRef.current) {
+      setDetail("Prepara la sesión en este dispositivo antes de consultar.");
+      setScreen("artist");
+      return;
+    }
+    lookup.current.startHold(currentContext());
+    const block = lookup.current.peek(currentContext());
+    setPeek(block);
+    if (block) {
+      setStatus("completado");
+      return;
+    }
+    if (!busy.current) void query(false);
+  }
+  function endPeek() {
+    lookup.current.release();
+    setPeek(null);
+    if (lookup.current.result(currentContext())) setStatus("recibido");
+  }
+  useEffect(() => {
+    const hide = () => {
+      lookup.current.release();
+      setPeek(null);
+    };
+    const visibility = () => {
+      if (document.hidden) hide();
+    };
+    window.addEventListener("blur", hide);
+    window.addEventListener("pagehide", hide);
+    window.addEventListener("pointerup", hide);
+    window.addEventListener("pointercancel", hide);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      window.removeEventListener("blur", hide);
+      window.removeEventListener("pagehide", hide);
+      window.removeEventListener("pointerup", hide);
+      window.removeEventListener("pointercancel", hide);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, []);
+  async function query(automatic = false) {
+    if (busy.current) return;
+    const s = sessionRef.current,
+      n = notesRef.current.find((n) => n.id === activeRef.current);
+    if (!s || !n) {
+      setStatus("error");
+      setDetail("Prepara una sesión autenticada en el área del artista.");
+      return;
+    }
+    let phone: string;
+    try {
+      phone = normalizePhone(n.text);
+    } catch (e) {
+      setStatus("error");
+      setDetail((e as Error).message);
+      return;
+    }
+    if (!allowedPhones.current.has(phone)) {
+      if (!automatic) {
+        setStatus("error");
+        setDetail("Este número no está autorizado para esta sesión.");
+      }
+      return;
+    }
+    const context: Context = {
+        sessionId: s.id,
+        noteId: n.id,
+        revision: revision.current,
+        generation: generation.current,
+      },
+      requestId = crypto.randomUUID(),
+      original = n.text;
+    const reserved = lookup.current.reserve(context, phone);
+    if (automatic && !reserved) return;
+    lookup.current.clearResult();
+    setPeek(null);
+    busy.current = true;
+    setPending(true);
+    setStatus("consultando");
+    setDetail(
+      "Consulta en curso. La respuesta esperará al gatillo; editar el texto la invalida.",
+    );
+    setNotes((ns) =>
+      ns.map((note) => (note.id === n.id ? { ...note, volatile: true } : note)),
+    );
+    const began = performance.now();
+    setMetrics({ ui: 0, provider: null });
+    requestAnimationFrame(() =>
+      setMetrics((m) => ({
+        ui: performance.now() - began,
+        provider: m?.provider ?? null,
+      })),
+    );
+    const abort = new AbortController();
+    controller.current = abort;
+    const timer = setTimeout(() => abort.abort(), 16000);
+    try {
+      const hash = await digest(original);
+      if (!canInsert(context, currentContext())) return;
+      const r = await api<Reply>(
+        "query",
+        {
+          sessionId: s.id,
+          noteId: n.id,
+          requestId,
+          revision: hash,
+          text: original,
+        },
+        s.csrf,
+        abort.signal,
+      );
+      if (!canInsert(context, currentContext())) {
+        setDetail("Respuesta descartada: cambió la sesión, nota o revisión.");
+        setStatus("preparado");
+        return;
+      }
+      if (
+        r.requestId !== requestId ||
+        r.sessionId !== s.id ||
+        r.noteId !== n.id ||
+        r.revision !== hash ||
+        r.phone !== phone
+      )
+        throw new Error("La respuesta no corresponde al contexto actual.");
+      setMetrics((m) => ({ ui: m?.ui ?? 0, provider: r.providerMs }));
+      if (!r.result) {
+        setStatus("sin resultado");
+        setDetail("El proveedor no tiene resultado para esta ficha.");
+        return;
+      }
+      const result = validateResult(r.result, requestId, phone);
+      const block = "\n\n" + formatResult(result);
+      if (original.length + block.length > 20000)
+        throw new Error(
+          "La respuesta no cabe en la nota; acorta el texto e inicia una nueva consulta.",
+        );
+      lookup.current.stage(context, block);
+      const visible = lookup.current.peek(currentContext());
+      setPeek(visible);
+      setStatus(visible ? "completado" : "recibido");
+      setDetail(
+        "Respuesta reservada en memoria. Mantén pulsados los eslabones para verla; se oculta al soltar. No acredita una identidad verificada.",
+      );
+    } catch (e) {
+      lookup.current.discard();
+      setPeek(null);
+      if (!canInsert(context, currentContext())) {
+        setDetail("Consulta cancelada para este contexto.");
+        setStatus("preparado");
+        return;
+      }
+      const message = abort.signal.aborted
+        ? "Tiempo de espera agotado o consulta cancelada; no se reintentó."
+        : (e as Error).message;
+      setStatus(
+        abort.signal.aborted || message.includes("TIMEOUT")
+          ? "tiempo agotado"
+          : "error",
+      );
+      setDetail(message);
+    } finally {
+      clearTimeout(timer);
+      busy.current = false;
+      setPending(false);
+      if (controller.current === abort) controller.current = null;
+    }
+  }
+  queryRef.current = query;
+  const note = notes.find((n) => n.id === active);
+  useEffect(() => {
+    if (!session || !note || pending || screen !== "notes") return;
+    if (!eligiblePhone(note.text, allowedPhones.current)) return;
+    // Wait for a pause in typing so a pasted/extended number cannot send per keystroke.
+    const timer = setTimeout(() => void queryRef.current(true), 800);
+    return () => clearTimeout(timer);
+  }, [note, active, session, pending, screen]);
+  if (!ready)
+    return (
+      <main className="app-shell" aria-busy="true">
+        <p role="status">Cargando notas…</p>
+      </main>
+    );
+  return (
+    <main className="app-shell">
+      {screen === "artist" ? (
+        <Artist
+          config={config}
+          session={session}
+          status={status}
+          detail={detail}
+          metrics={metrics}
+          close={() => setScreen("notes")}
+          start={start}
+          erase={erase}
+        />
+      ) : screen === "folders" ? (
+        <section className="folders">
+          <header className="plain-header">
+            <h1>Carpetas</h1>
+            <button
+              className="round"
+              aria-label="Área del artista"
+              onClick={() => setScreen("artist")}
+            >
+              <Icon name="more" />
+            </button>
+          </header>
+          <button className="folder-row" onClick={() => setScreen("notes")}>
+            <Icon name="folder" />
+            <span>Notas</span>
+            <span>{notes.filter((n) => !n.deleted).length}</span>
+            <Icon name="chevron" />
+          </button>
+          <button className="folder-row" onClick={() => setScreen("trash")}>
+            <Icon name="trash" />
+            <span>Eliminadas recientemente</span>
+            <span>{notes.filter((n) => n.deleted).length}</span>
+            <Icon name="chevron" />
+          </button>
+          <p>
+            Las notas ordinarias se guardan en este dispositivo. Las notas de
+            actuación duran solo durante la sesión.
+          </p>
+          <button className="primary" onClick={() => setScreen("artist")}>
+            Preparar actuación
+          </button>
+        </section>
+      ) : screen === "trash" ? (
+        <Trash
+          notes={notes.filter((n) => n.deleted)}
+          close={() => setScreen("folders")}
+          restore={(id) => {
+            if (notes.filter((n) => !n.deleted).length >= 200) {
+              setNotice(
+                "Elimina una nota del listado antes de recuperar otra; límite de 200 notas.",
+              );
+              return;
+            }
+            setNotes((ns) => restoreNote(ns, id));
+          }}
+          purge={(id) => setNotes((ns) => ns.filter((n) => n.id !== id))}
+        />
+      ) : note ? (
+        <Editor
+          key={note.id}
+          note={note}
+          change={change}
+          back={back}
+          beginPeek={beginPeek}
+          endPeek={endPeek}
+          peek={peek}
+          status={status}
+          pending={pending}
+          undoResult={undoResult}
+          remove={() => removeNote(note.id)}
+          pin={() => pinNote(note.id)}
+          artist={() => {
+            setScreen("artist");
+          }}
+        />
+      ) : (
+        <NoteList
+          notes={notes.filter((n) => !n.deleted)}
+          search={search}
+          setSearch={setSearch}
+          folded={folded}
+          setFolded={setFolded}
+          remove={removeNote}
+          pin={pinNote}
+          open={open}
+          create={create}
+          artist={() => setScreen("artist")}
+          folders={() => setScreen("folders")}
+        />
+      )}
+      {notice && (
+        <div className="app-notice" role="alert">
+          <span>{notice}</span>
+          <button onClick={() => setNotice("")} aria-label="Cerrar aviso">
+            <Icon name="close" />
+          </button>
+        </div>
+      )}
+    </main>
+  );
+}
+
+===== FIN: components/NotesApp.tsx =====
+
+
+===== ARCHIVO: components/Trash.tsx =====
+import { useState } from "react";
+import { title, type Note } from "../lib/client/notes";
+import { Icon } from "./Icon";
+
+export function Trash({
+  notes,
+  close,
+  restore,
+  purge,
+}: {
+  notes: Note[];
+  close: () => void;
+  restore: (id: string) => void;
+  purge: (id: string) => void;
+}) {
+  const [confirm, setConfirm] = useState<string | null>(null);
+  return (
+    <section className="folders">
+      <header className="plain-header">
+        <button
+          className="round"
+          aria-label="Volver a Carpetas"
+          onClick={close}
+        >
+          <Icon name="back" />
+        </button>
+        <h1>Eliminadas recientemente</h1>
+      </header>
+      <p>
+        Las notas ordinarias se pueden recuperar durante 30 días. Las notas de
+        actuación se descartan al eliminarlas.
+      </p>
+      {notes.length === 0 && <p className="empty">No hay notas eliminadas.</p>}
+      {notes.map((note) => (
+        <article className="trash-card" key={note.id}>
+          <h2>{title(note)}</h2>
+          <div className="trash-actions">
+            <button
+              aria-label={`Recuperar ${title(note)}`}
+              onClick={() => restore(note.id)}
+            >
+              Recuperar
+            </button>
+            <button
+              className="danger"
+              aria-label={`Eliminar definitivamente ${title(note)}`}
+              onClick={() => setConfirm(note.id)}
+            >
+              Eliminar
+            </button>
+          </div>
+          {confirm === note.id && (
+            <div role="group" aria-label="Confirmar eliminación definitiva">
+              <p>Esta nota se eliminará definitivamente de este dispositivo.</p>
+              <button
+                className="primary light"
+                onClick={() => setConfirm(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                className="primary danger"
+                onClick={() => {
+                  purge(note.id);
+                  setConfirm(null);
+                }}
+              >
+                Eliminar definitivamente
+              </button>
+            </div>
+          )}
+        </article>
+      ))}
+    </section>
+  );
+}
+
+===== FIN: components/Trash.tsx =====
+
+
+===== ARCHIVO: components/connector-error.tsx =====
+import { LinkIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { connectorErrorRecovery } from "@/lib/connector-errors.mjs";
+
+/** Render in the affected feature, leaving the rest of the Site usable. */
+export function ConnectorError({
+  error,
+  connectorName,
+  reconnectHref,
+}: {
+  error: { status: string; message: string };
+  connectorName: string;
+  reconnectHref: string;
+}) {
+  const recovery = connectorErrorRecovery(error, connectorName, reconnectHref);
+  return (
+    <div
+      role="alert"
+      className="flex min-w-0 flex-col items-start gap-3 text-sm"
+    >
+      <p className="break-words">{recovery.message}</p>
+      {recovery.action && (
+        <Button
+          asChild
+          variant="outline"
+          className="h-auto min-h-9 max-w-full whitespace-normal text-left"
+        >
+          <a href={recovery.action.href} target="_top">
+            <LinkIcon aria-hidden="true" />
+            <span className="min-w-0 break-words">{recovery.action.label}</span>
+          </a>
+        </Button>
+      )}
+    </div>
+  );
+}
+
+===== FIN: components/connector-error.tsx =====
+
+
+===== ARCHIVO: components/ui/accordion.tsx =====
+"use client";
+
+import * as React from "react";
+import { ChevronDownIcon } from "lucide-react";
+import { Accordion as AccordionPrimitive } from "radix-ui";
+
+import { 

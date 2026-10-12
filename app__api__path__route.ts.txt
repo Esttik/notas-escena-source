@@ -1,0 +1,145 @@
+ARCHIVO ORIGINAL: app/api/[...path]/route.ts
+
+import { env } from "cloudflare:workers";
+import { getChatGPTUser } from "../../chatgpt-auth";
+import { Service } from "../../../lib/server/service";
+import { Store } from "../../../lib/server/store";
+import {
+  participants,
+  isProviderConfigured,
+  type ProviderConfig,
+} from "../../../lib/server/providers";
+import { AppError } from "../../../lib/domain";
+import { TelegramProvider } from "../../../lib/server/telegram";
+export const dynamic = "force-dynamic";
+const headers = {
+  "Content-Type": "application/json; charset=utf-8",
+  "Cache-Control": "no-store, private",
+  Vary: "Cookie",
+  "X-Content-Type-Options": "nosniff",
+};
+async function handle(request: Request) {
+  try {
+    const user = await getChatGPTUser();
+    if (!user) throw new AppError("AUTH", "Inicia sesión como artista.", 401);
+    const config = env as unknown as ProviderConfig;
+    const url = new URL(request.url),
+      path = url.pathname;
+    if (request.method === "GET" && path === "/api/config")
+      return Response.json(
+        {
+          mode: config.PROVIDER_MODE ?? "demo",
+          transport:
+            config.PROVIDER_MODE === "real"
+              ? (config.PROVIDER_TRANSPORT ?? "http")
+              : "demo",
+          artist: user.displayName,
+          artistId: user.userId,
+          participants: participants(config, user.userId),
+          realConfigured: isProviderConfigured(
+            config,
+            env.DB ? new Store(env.DB) : undefined,
+          ),
+        },
+        { headers },
+      );
+    if (!env.DB)
+      throw new AppError(
+        "DATABASE",
+        "La base de sesiones no está disponible.",
+        503,
+      );
+    const service = new Service(new Store(env.DB), config);
+    if (request.method === "GET" && path === "/api/provider-check") {
+      if (!(service.provider instanceof TelegramProvider))
+        throw new AppError(
+          "PROVIDER_CONFIG",
+          "No hay transporte Telegram configurado.",
+          409,
+        );
+      await service.rate(user.userId, "provider-check", 5);
+      return Response.json(
+        await service.provider.check(AbortSignal.timeout(8000)),
+        { headers },
+      );
+    }
+    if (request.method === "GET" && path === "/api/diagnostics")
+      return Response.json(
+        await service.diagnostics(
+          user.userId,
+          url.searchParams.get("sessionId") ?? "",
+          request.headers.get("x-csrf-token"),
+        ),
+        { headers },
+      );
+    if (request.method !== "POST")
+      throw new AppError("METHOD", "Ruta no disponible.", 404);
+    if (
+      request.headers.get("origin") !== url.origin ||
+      request.headers.get("sec-fetch-site") === "cross-site"
+    )
+      throw new AppError("ORIGIN", "Origen no permitido.", 403);
+    if (!request.headers.get("content-type")?.startsWith("application/json"))
+      throw new AppError("CONTENT_TYPE", "Usa JSON.", 415);
+    if (Number(request.headers.get("content-length")) > 32768)
+      throw new AppError("TOO_LARGE", "Petición demasiado grande.", 413);
+    // Stream limit before parsing, including requests without Content-Length.
+    const reader = request.body?.getReader();
+    if (!reader) throw new AppError("INPUT", "Falta cuerpo JSON.");
+    let size = 0,
+      content = "";
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 32768) {
+        await reader.cancel();
+        throw new AppError("TOO_LARGE", "Petición demasiado grande.", 413);
+      }
+      content += decoder.decode(value, { stream: true });
+    }
+    content += decoder.decode();
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(content);
+    } catch {
+      throw new AppError("INPUT", "JSON no válido.");
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body))
+      throw new AppError("INPUT", "Petición no válida.");
+    if (path === "/api/session")
+      return Response.json(await service.start(user.userId, body), { headers });
+    if (path === "/api/erase") {
+      await service.erase(user.userId);
+      return Response.json({ ok: true }, { headers });
+    }
+    if (path === "/api/query")
+      return Response.json(
+        await service.query(
+          user.userId,
+          body,
+          request.headers.get("x-csrf-token"),
+        ),
+        { headers },
+      );
+    throw new AppError("NOT_FOUND", "Ruta no disponible.", 404);
+  } catch (error) {
+    const e =
+      error instanceof AppError
+        ? error
+        : new AppError(
+            "INTERNAL",
+            "Error interno. Vuelve a intentarlo desde el área del artista.",
+            500,
+          );
+    // Log only a fixed error code. Never log exceptions from an external service.
+    if (e.status >= 500) console.error(JSON.stringify({ code: e.code }));
+    return Response.json(
+      { error: e.message, code: e.code },
+      { status: e.status, headers },
+    );
+  }
+}
+export const GET = handle;
+export const POST = handle;

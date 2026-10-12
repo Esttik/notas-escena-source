@@ -1,0 +1,969 @@
+));
+  }, [session]);
+  async function action(fn: () => Promise<void>) {
+    setBusy(true);
+    setError("");
+    try {
+      await fn();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="artist-screen">
+      <header className="plain-header">
+        <button className="round" aria-label="Volver a Notas" onClick={close}>
+          <Icon name="back" />
+        </button>
+        <h1>Área del artista</h1>
+      </header>
+      <div className="artist-content">
+        <div className="mode-label">
+          {config?.mode === "real"
+            ? config.transport === "telegram"
+              ? "Telegram · bot propio"
+              : "Proveedor real"
+            : "Demostración · datos ficticios"}
+        </div>
+        <h2>Prepara la sesión</h2>
+        <p>
+          Solo se consultan las fichas autorizadas que selecciones aquí. Entrega
+          el dispositivo al participante cuando la sesión esté preparada.
+        </p>
+        <p className="small">
+          Al detectar un único móvil autorizado, la consulta comienza después de
+          una pausa de 800 ms. Mantén pulsados los eslabones para ver la
+          respuesta; se oculta al soltar y la nota conserva su texto. No se
+          reintenta automáticamente.
+        </p>
+        {!config && <p role="status">Cargando configuración…</p>}
+        {config?.mode === "real" && config.transport === "telegram" && (
+          <div className="notice">
+            <p>
+              La configuración no demuestra que el destinatario admita la
+              conexión. La comprobación no envía teléfonos ni inicia consultas.
+            </p>
+            <button
+              className="primary light"
+              disabled={busy || !config.realConfigured}
+              onClick={() =>
+                action(async () => {
+                  await api("provider-check");
+                  setConnectionMessage(
+                    "Token y conversación comprobados. Comunicación entre bots y protocolo todavía pendientes de una consulta autorizada real.",
+                  );
+                })
+              }
+            >
+              Comprobar conexión del bot
+            </button>
+            {connectionMessage && <p role="status">{connectionMessage}</p>}
+          </div>
+        )}
+        {config && (
+          <>
+            <p className="small">Artista: {config.artist}</p>
+            {config.mode === "demo" ? (
+              <p className="notice">
+                Este modo no envía nada a Telegram. Los números siguientes son
+                claves sintéticas del juego y sus fichas están inventadas.
+              </p>
+            ) : (
+              <p className="notice">
+                Solo aparecen altas con evidencia previa de consentimiento y
+                titularidad en el registro del servidor. La respuesta del
+                proveedor no acredita una identidad verificada.
+              </p>
+            )}
+            <fieldset>
+              <legend>Participantes de esta sesión</legend>
+              {config.participants.map((p) => (
+                <label className="participant" key={p.id}>
+                  <input
+                    type="checkbox"
+                    checked={ids.includes(p.id)}
+                    onChange={(e) =>
+                      setIds(
+                        e.target.checked
+                          ? [...ids, p.id]
+                          : ids.filter((i) => i !== p.id),
+                      )
+                    }
+                  />
+                  <span>
+                    {p.label}
+                    <strong>{p.phone}</strong>
+                  </span>
+                </label>
+              ))}
+              {!config.participants.length && (
+                <p>No hay participantes autorizados vigentes.</p>
+              )}
+            </fieldset>
+            <button
+              className="primary"
+              disabled={
+                busy ||
+                !ids.length ||
+                (config.mode === "real" && !config.realConfigured)
+              }
+              onClick={() => action(() => start(ids))}
+            >
+              {session ? "Reiniciar sesión" : "Preparar sesión"}
+            </button>
+          </>
+        )}
+        {session && (
+          <>
+            <div className="session-info">
+              <h2>Sesión preparada</h2>
+              <p>
+                Caduca a las{" "}
+                {new Intl.DateTimeFormat("es", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  timeZone: "Europe/Andorra",
+                }).format(session.expires)}
+                . Las notas de actuación no se guardan en este dispositivo.
+              </p>
+              <button className="primary light" onClick={close}>
+                Volver a las notas
+              </button>
+            </div>
+            <button
+              className="danger"
+              disabled={busy}
+              onClick={() => action(erase)}
+            >
+              Borrar sesión y resultados
+            </button>
+          </>
+        )}
+        <div className="diagnostics">
+          <h2>Estado y diagnóstico</h2>
+          <p className="small">Versión {APP_VERSION}</p>
+          <p>
+            <strong>{status}</strong>
+          </p>
+          <p className="small">
+            {detail ||
+              "La consulta empieza con un móvil autorizado. Mantén pulsados los eslabones para ver el peek; suelta para ocultarlo. Tras un error, volver a mantenerlos inicia un reintento explícito."}
+          </p>
+          {metrics && (
+            <p className="small">
+              Respuesta visual: {metrics.ui.toFixed(1)} ms · Proveedor:{" "}
+              {metrics.provider === null
+                ? "pendiente"
+                : `${metrics.provider} ms`}
+            </p>
+          )}
+          {logs.map((l) => (
+            <p className="small" key={l.id}>
+              {l.status}
+              {l.code ? ` · ${l.code}` : ""}
+              {l.provider_ms !== null ? ` · ${l.provider_ms} ms` : ""}
+              <br />
+              <span className="request-id">{l.id}</span>
+            </p>
+          ))}
+        </div>
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="help">
+          <h2>Uso en iPhone</h2>
+          <p>
+            Abre esta dirección en Safari y elige Compartir → Añadir a la
+            pantalla de inicio. El teclado es el del sistema. La consulta
+            requiere mantener la app abierta y conexión a internet.
+          </p>
+          <p>
+            El peek puede verlo quien mire la pantalla mientras mantienes
+            pulsado. Se oculta al soltar. Deshacer permite descartar el
+            resultado reservado.
+          </p>
+          <p>
+            No se almacenan resultados en la PWA, analítica ni cachés. Borrar
+            aquí no borra lo que pueda conservar Telegram o el proveedor;
+            solicita su eliminación según su política.
+          </p>
+          <p>
+            La barra ofrece texto, lista, tabla de texto y adjuntar texto. El
+            lápiz abre las opciones de escritura. Dibujo, escaneo, bloqueo
+            nativo y edición colaborativa no están implementados.
+          </p>
+          <p className="small">
+            Tu identificación del artista en este sitio:{" "}
+            <span className="request-id">{config?.artistId}</span>
+          </p>
+        </div>
+        <a className="signout" href="/signout-with-chatgpt?return_to=/">
+          Cerrar sesión de artista
+        </a>
+      </div>
+    </section>
+  );
+}
+
+===== FIN: components/Artist.tsx =====
+
+
+===== ARCHIVO: components/Editor.tsx =====
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type PointerEvent,
+  type MouseEvent,
+} from "react";
+import { Icon, type IconName } from "./Icon";
+import type { Note } from "../lib/client/notes";
+import { EditorHistory, type Snapshot } from "../lib/client/editor-history";
+type EditorSnapshot = Snapshot & {
+  fragment?: DocumentFragment;
+  anchor?: number[];
+  focus?: number[];
+  anchorOffset?: number;
+  focusOffset?: number;
+};
+export type EditorHandle = {
+  append: (text: string) => string;
+  insert: (text: string) => void;
+  replace: (text: string) => void;
+  undo: () => void;
+};
+export const Editor = forwardRef<
+  EditorHandle,
+  {
+    note: Note;
+    change: (text: string) => void;
+    back: () => void;
+    beginPeek: () => void;
+    endPeek: () => void;
+    peek: string | null;
+    status: string;
+    pending: boolean;
+    undoResult: () => boolean;
+    remove: () => void;
+    pin: () => void;
+    artist: () => void;
+  }
+>((props, ref) => {
+  const editor = useRef<HTMLDivElement>(null),
+    upload = useRef<HTMLInputElement>(null);
+  const initialText = useRef(props.note.text);
+  const [menu, setMenu] = useState(false),
+    [format, setFormat] = useState(false),
+    [hint, setHint] = useState("");
+  const [peekTop, setPeekTop] = useState(0);
+  const peekPointer = useRef<number | null>(null);
+  const history = useRef(
+    new EditorHistory<EditorSnapshot>({
+      text: props.note.text,
+      start: 0,
+      end: 0,
+    }),
+  );
+  const before = useRef<EditorSnapshot | null>(null);
+  const undoRef = useRef<() => void>(() => {});
+  const redoRef = useRef<() => void>(() => {});
+  const touch = useRef<{ target: EventTarget; x: number; y: number } | null>(
+    null,
+  );
+  const lastTouch = useRef<{ target: EventTarget; at: number } | null>(null);
+  function suppressRetargetedTouchClick(x: number, y: number) {
+    // A touch-generated click can be retargeted to the list after deletion
+    // removes its button. Consume that click, never a new pointer gesture.
+    const clear = () => {
+      window.removeEventListener("click", consume, true);
+      window.removeEventListener("pointerdown", clear, true);
+      clearTimeout(timer);
+    };
+    const consume = (event: globalThis.MouseEvent) => {
+      if (
+        event.detail === 0 ||
+        Math.hypot(event.clientX - x, event.clientY - y) > 24
+      )
+        return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      clear();
+    };
+    const timer = setTimeout(clear, 600);
+    window.addEventListener("click", consume, true);
+    window.addEventListener("pointerdown", clear, {
+      capture: true,
+      once: true,
+    });
+  }
+  function focusAction(action: () => void, removesTarget = false) {
+    return {
+      onPointerDown(e: PointerEvent<HTMLButtonElement>) {
+        // Safari can suppress click after cancelling touch pointerdown. Handle
+        // that activation on pointerup while preserving the native editor focus.
+        e.preventDefault();
+        touch.current =
+          e.pointerType === "touch"
+            ? { target: e.currentTarget, x: e.clientX, y: e.clientY }
+            : null;
+      },
+      onPointerUp(e: PointerEvent<HTMLButtonElement>) {
+        const start = touch.current;
+        touch.current = null;
+        if (
+          e.pointerType !== "touch" ||
+          !start ||
+          start.target !== e.currentTarget ||
+          Math.hypot(start.x - e.clientX, start.y - e.clientY) > 10
+        )
+          return;
+        e.preventDefault();
+        lastTouch.current = { target: e.currentTarget, at: Date.now() };
+        if (removesTarget) suppressRetargetedTouchClick(e.clientX, e.clientY);
+        action();
+      },
+      onPointerCancel() {
+        touch.current = null;
+      },
+      onClick(e: MouseEvent<HTMLButtonElement>) {
+        if (
+          lastTouch.current?.target === e.currentTarget &&
+          Date.now() - lastTouch.current.at < 500
+        )
+          return;
+        action();
+      },
+    };
+  }
+  function capture(): EditorSnapshot {
+    const el = editor.current;
+    if (!el) return history.current.current;
+    const selection = window.getSelection();
+    const path = (node: Node | null) => {
+      const indices: number[] = [];
+      while (node && node !== el) {
+        const parent = node.parentNode;
+        if (!parent) return undefined;
+        indices.unshift(Array.prototype.indexOf.call(parent.childNodes, node));
+        node = parent;
+      }
+      return node === el ? indices : undefined;
+    };
+    const fragment = document.createDocumentFragment();
+    for (const node of el.childNodes) fragment.append(node.cloneNode(true));
+    return {
+      text: el.innerText,
+      start: 0,
+      end: 0,
+      fragment,
+      anchor: path(selection?.anchorNode ?? null),
+      focus: path(selection?.focusNode ?? null),
+      anchorOffset: selection?.anchorOffset,
+      focusOffset: selection?.focusOffset,
+    };
+  }
+  function restore(snapshot: EditorSnapshot) {
+    const el = editor.current;
+    if (!el) return;
+    if (snapshot.fragment)
+      el.replaceChildren(snapshot.fragment.cloneNode(true));
+    else el.textContent = snapshot.text;
+    el.focus({ preventScroll: true });
+    const locate = (path?: number[]) => {
+      let node: Node = el;
+      for (const index of path ?? []) {
+        if (!node.childNodes[index]) return null;
+        node = node.childNodes[index];
+      }
+      return node;
+    };
+    const anchor = locate(snapshot.anchor),
+      focus = locate(snapshot.focus),
+      selection = window.getSelection();
+    if (anchor && focus && snapshot.anchor && snapshot.focus) {
+      try {
+        selection?.setBaseAndExtent(
+          anchor,
+          snapshot.anchorOffset ?? 0,
+          focus,
+          snapshot.focusOffset ?? 0,
+        );
+      } catch {}
+    } else {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    before.current = null;
+    props.change(snapshot.text);
+  }
+  function notify() {
+    const snapshot = capture();
+    if (snapshot.text.length > 20000) {
+      restore(before.current ?? history.current.current);
+      before.current = null;
+      setHint(
+        "La nota admite hasta 20.000 caracteres. No se añadió el texto excedente.",
+      );
+      return;
+    }
+    history.current.record(snapshot, before.current ?? undefined);
+    before.current = null;
+    props.change(snapshot.text);
+  }
+
+  function insert(text: string, append = false) {
+    const el = editor.current;
+    if (!el) return;
+    before.current = capture();
+    const scrollTop = document.scrollingElement?.scrollTop ?? 0;
+    const selection = window.getSelection();
+    const previous = selection?.rangeCount
+      ? selection.getRangeAt(0).cloneRange()
+      : null;
+    el.focus({ preventScroll: true });
+    if (
+      append ||
+      !selection?.anchorNode ||
+      !el.contains(selection.anchorNode)
+    ) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    if (!document.execCommand("insertText", false, text)) {
+      const range = selection?.getRangeAt(0);
+      if (range) {
+        range.deleteContents();
+        const node = document.createTextNode(text);
+        range.insertNode(node);
+        range.setStartAfter(node);
+        range.collapse(true);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      }
+      notify();
+    }
+    if (append && previous && el.contains(previous.startContainer)) {
+      selection?.removeAllRanges();
+      selection?.addRange(previous);
+    }
+    if (document.scrollingElement)
+      document.scrollingElement.scrollTop = scrollTop;
+  }
+  function replace(text: string) {
+    const el = editor.current;
+    if (!el) return;
+    el.textContent = text;
+    // Removing a provider result must also discard its undo snapshots.
+    history.current = new EditorHistory(capture());
+    before.current = null;
+    restore(history.current.current);
+  }
+  function undo() {
+    if (!props.undoResult()) {
+      const snapshot = history.current.undo();
+      if (snapshot) restore(snapshot);
+    }
+  }
+  function redo() {
+    const snapshot = history.current.redo();
+    if (snapshot) restore(snapshot);
+  }
+  undoRef.current = undo;
+  redoRef.current = redo;
+  useEffect(() => {
+    if (!props.peek || !editor.current) return;
+    const el = editor.current;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const position = () =>
+      setPeekTop(
+        range.getBoundingClientRect().bottom -
+          el.getBoundingClientRect().top +
+          18,
+      );
+    position();
+    window.addEventListener("resize", position);
+    window.visualViewport?.addEventListener("resize", position);
+    return () => {
+      window.removeEventListener("resize", position);
+      window.visualViewport?.removeEventListener("resize", position);
+    };
+  }, [props.peek]);
+  useEffect(() => {
+    const el = editor.current;
+    if (!el) return;
+    function beforeInput(e: Event) {
+      const input = e as InputEvent;
+      if (input.inputType === "historyUndo" && input.cancelable) {
+        input.preventDefault();
+        undoRef.current();
+      } else if (input.inputType === "historyRedo" && input.cancelable) {
+        input.preventDefault();
+        redoRef.current();
+      } else before.current = capture();
+    }
+    el.addEventListener("beforeinput", beforeInput);
+    return () => el.removeEventListener("beforeinput", beforeInput);
+  }, []);
+  useImperativeHandle(ref, () => ({
+    append: (text) => {
+      insert(text, true);
+      return editor.current?.innerText ?? props.note.text;
+    },
+    insert: (text) => insert(text),
+    replace,
+    undo,
+  }));
+  useEffect(() => {
+    if (editor.current) {
+      editor.current.textContent = initialText.current;
+      history.current = new EditorHistory(capture());
+      if (!initialText.current) editor.current.focus({ preventScroll: true });
+    }
+  }, []);
+  useEffect(() => {
+    if (!menu && !format) return;
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setMenu(false);
+        setFormat(false);
+        editor.current?.focus({ preventScroll: true });
+      }
+    };
+    const outside = (e: globalThis.PointerEvent) => {
+      const target = e.target as Element;
+      if (
+        !target.closest(
+          ".note-menu,.format-menu,[aria-label='Opciones de nota'],[aria-label='Opciones de texto'],[aria-label='Opciones de escritura']",
+        )
+      ) {
+        setMenu(false);
+        setFormat(false);
+      }
+    };
+    window.addEventListener("keydown", escape);
+    window.addEventListener("pointerdown", outside);
+    return () => {
+      window.removeEventListener("keydown", escape);
+      window.removeEventListener("pointerdown", outside);
+    };
+  }, [menu, format]);
+  const tool = (name: IconName, label: string, fn: () => void) => (
+    <button className="tool" aria-label={label} {...focusAction(fn)}>
+      <Icon name={name} />
+    </button>
+  );
+  return (
+    <section className="editor-screen">
+      <header className="editor-header">
+        <button
+          className="round"
+          aria-label="Volver a las notas"
+          onClick={props.back}
+        >
+          <Icon name="back" />
+        </button>
+        <div className="editor-actions">
+          <button
+            className="round"
+            aria-label="Deshacer"
+            {...focusAction(undo)}
+          >
+            <Icon name="undo" />
+          </button>
+          <div className="action-pill">
+            <button
+              aria-label="Compartir nota"
+              onClick={async () => {
+                try {
+                  if (navigator.share) {
+                    await navigator.share({ text: props.note.text });
+                  } else {
+                    setHint(
+                      "Compartir requiere Safari o un navegador con el menú de compartir.",
+                    );
+                  }
+                } catch {
+                  setHint("No se compartió la nota.");
+                }
+              }}
+            >
+              <Icon name="share" />
+            </button>
+            <button
+              aria-label="Opciones de nota"
+              aria-expanded={menu}
+              onClick={() => setMenu(!menu)}
+            >
+              <Icon name="more" />
+            </button>
+          </div>
+          <button
+            className="round done"
+            aria-label="Finalizar escritura"
+            onClick={() => editor.current?.blur()}
+          >
+            <Icon name="check" />
+          </button>
+        </div>
+      </header>
+      {menu && (
+        <div className="note-menu" role="group" aria-label="Acciones de nota">
+          <button
+            onClick={() => {
+              props.pin();
+              setMenu(false);
+            }}
+          >
+            <Icon name="pin" />
+            {props.note.pinned ? "Desfijar nota" : "Fijar nota"}
+          </button>
+          <button
+            onClick={() => {
+              undo();
+              setMenu(false);
+            }}
+          >
+            <Icon name="undo" />
+            Deshacer
+          </button>
+          <button onClick={props.artist}>Área del artista</button>
+          <button className="danger" {...focusAction(props.remove, true)}>
+            <Icon name="trash" />
+            Eliminar nota
+          </button>
+        </div>
+      )}
+      <div className="writing-stack">
+        <div
+          ref={editor}
+          className="writing-area"
+          contentEditable="plaintext-only"
+          role="textbox"
+          aria-label="Texto de la nota"
+          aria-multiline="true"
+          suppressContentEditableWarning
+          spellCheck={false}
+          autoCapitalize="sentences"
+          onInput={notify}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+              e.preventDefault();
+              if (e.shiftKey) redo();
+              else undo();
+            }
+          }}
+          onPaste={(e) => {
+            e.preventDefault();
+            insert(e.clipboardData.getData("text/plain"));
+          }}
+        />
+        {props.peek && (
+          <div
+            className="peek-result"
+            role="status"
+            aria-label="Vista temporal"
+            style={{ top: peekTop }}
+          >
+            {props.peek.trimStart()}
+          </div>
+        )}
+      </div>
+      {hint && (
+        <div className="editor-hint" role="status">
+          <p>{hint}</p>
+          <button onClick={() => setHint("")}>Cerrar</button>
+        </div>
+      )}
+      {format && (
+        <div className="format-menu">
+          <p>Escritura</p>
+          <button
+            {...focusAction(() => {
+              insert("• ");
+              setFormat(false);
+            })}
+          >
+            Añadir viñeta
+          </button>
+          <button
+            {...focusAction(() => {
+              insert("\n");
+              setFormat(false);
+            })}
+          >
+            Nueva línea
+          </button>
+          <button
+            onClick={() => {
+              setFormat(false);
+              setHint(
+                "La primera línea es el título. El resto de la nota utiliza texto plano.",
+              );
+            }}
+          >
+            Formato de esta nota
+          </button>
+        </div>
+      )}
+      <div
+        className="keyboard-toolbar"
+        role="toolbar"
+        aria-label="Herramientas de escritura"
+      >
+        <button
+          className="tool text-tool"
+          aria-label="Opciones de texto"
+          {...focusAction(() => setFormat(!format))}
+        >
+          Aa
+        </button>
+        {tool("checklist", "Añadir elemento de lista", () => insert("☐ "))}
+        {tool("table", "Insertar tabla de texto", () =>
+          insert("\nColumna A | Columna B\n────────── | ──────────\n"),
+        )}
+        {tool("clip", "Adjuntar archivo de texto", () =>
+          upload.current?.click(),
+        )}
+        {tool("pen", "Opciones de escritura", () => setFormat(!format))}
+        <button
+          className={`tool link-tool ${["recibido", "completado"].includes(props.status) ? "complete" : ""} ${props.pending ? "pending" : ""} ${["error", "tiempo agotado", "sin resultado"].includes(props.status) ? "failed" : ""}`}
+          aria-label={`Eslabones: ${props.status}`}
+          aria-busy={props.pending}
+          aria-pressed={!!props.peek}
+          onPointerDown={(e) => {
+            if (!e.isPrimary || e.button !== 0) return;
+            e.preventDefault();
+            peekPointer.current = e.pointerId;
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {
+              /* Global release handler remains active. */
+            }
+            props.beginPeek();
+          }}
+          onPointerUp={(e) => {
+            if (peekPointer.current !== e.pointerId) return;
+            peekPointer.current = null;
+            props.endPeek();
+            if (e.currentTarget.hasPointerCapture(e.pointerId))
+              e.currentTarget.releasePointerCapture(e.pointerId);
+          }}
+          onPointerCancel={() => {
+            peekPointer.current = null;
+            props.endPeek();
+          }}
+          onLostPointerCapture={() => {
+            peekPointer.current = null;
+            props.endPeek();
+          }}
+          onKeyDown={(e) => {
+            if (![" ", "Enter"].includes(e.key) || e.repeat) return;
+            e.preventDefault();
+            props.beginPeek();
+          }}
+          onKeyUp={(e) => {
+            if ([" ", "Enter"].includes(e.key)) {
+              e.preventDefault();
+              props.endPeek();
+            }
+          }}
+          onBlur={props.endPeek}
+          onContextMenu={(e) => e.preventDefault()}
+          onClick={(e) => e.preventDefault()}
+        >
+          <Icon name="link" />
+          <span className="state-mark" aria-hidden="true" />
+        </button>
+      </div>
+      <input
+        ref={upload}
+        type="file"
+        accept="text/plain,.txt"
+        className="sr-only"
+        aria-label="Archivo de texto"
+        onChange={async (e) => {
+          const f = e.target.files?.[0];
+          if (f) {
+            if (f.size > 10000) {
+              setHint("El archivo de texto debe ocupar menos de 10 KB.");
+            } else {
+              insert("\n" + (await f.text()));
+            }
+          }
+          e.target.value = "";
+        }}
+      />
+      <span className="sr-only" role="status" aria-live="polite">
+        {props.status}
+      </span>
+    </section>
+  );
+});
+Editor.displayName = "Editor";
+
+===== FIN: components/Editor.tsx =====
+
+
+===== ARCHIVO: components/Icon.tsx =====
+import type { CSSProperties } from "react";
+export type IconName =
+  | "back"
+  | "more"
+  | "compose"
+  | "search"
+  | "undo"
+  | "share"
+  | "check"
+  | "checklist"
+  | "table"
+  | "clip"
+  | "pen"
+  | "link"
+  | "pin"
+  | "trash"
+  | "chevron"
+  | "folder"
+  | "close";
+export function Icon({
+  name,
+  style,
+}: {
+  name: IconName;
+  style?: CSSProperties;
+}) {
+  const paths: Record<IconName, React.ReactNode> = {
+    back: <path d="m15 4-8 8 8 8" />,
+    more: (
+      <>
+        <circle cx="5" cy="12" r="1.4" fill="currentColor" />
+        <circle cx="12" cy="12" r="1.4" fill="currentColor" />
+        <circle cx="19" cy="12" r="1.4" fill="currentColor" />
+      </>
+    ),
+    compose: (
+      <>
+        <path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6M14 5l5 5M10 14l-1 4 4-1L22 8l-4-4Z" />
+      </>
+    ),
+    search: (
+      <>
+        <circle cx="10" cy="10" r="6.5" />
+        <path d="m15 15 5 5" />
+      </>
+    ),
+    undo: <path d="m9 4-6 6 6 6M3 10h10c9 0 10 11 0 11" />,
+    share: (
+      <>
+        <path d="M8 8H5v13h14V8h-3M12 15V2m-5 5 5-5 5 5" />
+      </>
+    ),
+    check: <path d="m4 12 6 7L21 3" />,
+    checklist: (
+      <>
+        <circle cx="4" cy="6" r="2" />
+        <path d="m3 6 1 1 2-3M10 6h11M10 17h11" />
+        <circle cx="4" cy="17" r="2" />
+      </>
+    ),
+    table: (
+      <>
+        <rect x="2" y="3" width="20" height="18" rx="1.5" />
+        <path d="M2 9h20M2 15h20M10 3v18" />
+      </>
+    ),
+    clip: (
+      <path d="m9 15 9-9c4-4-1-9-5-5L3 11c-6 6 2 14 8 8L21 9M7 13l8-8c2-2 4 0 2 2l-9 9c-3 3-6-1-3-4" />
+    ),
+    pen: (
+      <>
+        <circle cx="12" cy="12" r="10" />
+        <path d="m7 21 3-10 2-6 2 6 3 10M10 11h4M9 16h6" />
+      </>
+    ),
+    link: (
+      <>
+        <path
+          d="m9 14 6-6M8 16l-2 2a4 4 0 0 1-6-6l5-5a4 4 0 0 1 6 0M16 8l2-2a4 4 0 0 1 6 6l-5 5a4 4 0 0 1-6 0"
+          transform="translate(1 0) scale(.92)"
+        />
+      </>
+    ),
+    pin: <path d="m15 3 6 6-3 1-4 4v4l-3-3-7 7 7-7-4-3h4l4-4ZM15 3Z" />,
+    trash: (
+      <>
+        <path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7" />
+      </>
+    ),
+    chevron: <path d="m6 9 6 6 6-6" />,
+    folder: <path d="M2 6h8l2 3h10v11H2ZM2 6V3h8l2 3h9v3" />,
+    close: <path d="m6 6 12 12M18 6 6 18" />,
+  };
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={style}
+    >
+      {paths[name]}
+    </svg>
+  );
+}
+
+===== FIN: components/Icon.tsx =====
+
+
+===== ARCHIVO: components/NoteList.tsx =====
+import { useEffect, useRef, useState } from "react";
+import {
+  dateLabel,
+  excerpt,
+  findNotes,
+  groups,
+  title,
+  type Note,
+} from "../lib/client/notes";
+import { Icon } from "./Icon";
+export function NoteList({
+  notes,
+  open,
+  create,
+  artist,
+  folders,
+  search,
+  setSearch,
+  folded,
+  setFolded,
+  remove,
+  pin,
+}: {
+  notes: Note[];
+  open: (id: string) => void;
+  create: () => void;
+  artist: () => void;
+  folders: () => void;
+  search: string;
+  setSearch: (value: string) => void;
+  folded: boolean;
+  setFolded: (value: boolean) => void;
+  remove: (id: string) => void;
+  pin: (id: string) => void;
+}) {
+  const [,

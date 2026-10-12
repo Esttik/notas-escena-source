@@ -1,0 +1,186 @@
+ARCHIVO ORIGINAL: bridge/src/engine.ts
+
+import {
+  AppError,
+  normalizePhone,
+  type QueryResult,
+} from "../../lib/domain.ts";
+import { parseTelegramResult } from "../../lib/server/telegram.ts";
+import { BridgeError } from "./errors.ts";
+export interface QueryLedger {
+  claim(
+    requestId: string,
+    phone: string,
+    sessionId: string,
+  ): void | Promise<void>;
+  finish(
+    requestId: string,
+    status: string,
+    cooldownMs: number,
+  ): void | Promise<void>;
+}
+export type Message = {
+  id: number;
+  senderId: string;
+  chatId: string;
+  replyTo?: number;
+  text: string;
+};
+export interface Transport {
+  verify(signal: AbortSignal): Promise<{
+    phone: string;
+    targetId: string;
+    targetBot: boolean;
+    targetUsername: string;
+  }>;
+  send(phone: string, signal: AbortSignal, requestId: string): Promise<number>;
+  messages(sentId: number, signal: AbortSignal): Promise<Message[]>;
+  close?(): Promise<void>;
+}
+type Input = { requestId: string; sessionId: string; phone: string };
+type Options = {
+  finalSuffix: string;
+  noResultText?: string;
+  timeoutMs?: number;
+  pollMs?: number;
+};
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export class BridgeEngine {
+  transport: Transport;
+  ledger: QueryLedger;
+  options: Options;
+  constructor(transport: Transport, ledger: QueryLedger, options: Options) {
+    if (
+      !options.finalSuffix ||
+      options.finalSuffix.length > 100 ||
+      /[\r\n]/.test(options.finalSuffix)
+    )
+      throw new BridgeError("PROTOCOL_CONFIG", 503);
+    this.transport = transport;
+    this.ledger = ledger;
+    this.options = options;
+  }
+  async lookup(input: Input, signal: AbortSignal): Promise<QueryResult> {
+    const started = Date.now(),
+      timeoutMs = this.options.timeoutMs ?? 10000;
+    const alive = () => {
+      if (signal.aborted || Date.now() - started >= timeoutMs)
+        throw new BridgeError("TIMEOUT", 504);
+    };
+    alive();
+    if (
+      !UUID.test(input.requestId) ||
+      !UUID.test(input.sessionId) ||
+      normalizePhone(input.phone) !== input.phone
+    )
+      throw new BridgeError("INPUT", 400);
+    await this.ledger.claim(input.requestId, input.phone, input.sessionId);
+    let state = "error",
+      cooldown = 60000;
+    try {
+      alive();
+      const target = await this.transport.verify(signal);
+      alive();
+      if (
+        target.targetId !== "6108968969" ||
+        !target.targetBot ||
+        target.targetUsername.toLowerCase() !== "truecallerobot"
+      )
+        throw new BridgeError("TARGET", 503);
+      if (target.phone !== input.phone)
+        throw new BridgeError("OWN_PHONE_ONLY", 403);
+      const sent = await this.transport.send(
+        input.phone,
+        signal,
+        input.requestId,
+      );
+      alive();
+      if (!Number.isSafeInteger(sent) || sent < 1)
+        throw new BridgeError("SEND_UNCONFIRMED");
+      const seen = new Set<string>();
+      for (let poll = 0; poll < 30; poll++) {
+        alive();
+        const messages = await this.transport.messages(sent, signal);
+        alive();
+        if (!Array.isArray(messages) || messages.length > 20)
+          throw new BridgeError("INVALID_RESULT");
+        for (const m of messages) {
+          if (
+            m.senderId !== target.targetId ||
+            m.chatId !== target.targetId ||
+            m.replyTo !== sent ||
+            !Number.isSafeInteger(m.id) ||
+            m.id <= sent ||
+            typeof m.text !== "string"
+          )
+            continue;
+          if (m.text.length > 8192) throw new BridgeError("INVALID_RESULT");
+          const key = JSON.stringify([m.id, m.text]);
+          if (seen.has(key)) continue;
+          if (seen.size >= 100) throw new BridgeError("MESSAGE_LIMIT");
+          seen.add(key);
+          try {
+            const result = parseTelegramResult(
+              m.text,
+              input.requestId,
+              input.phone,
+              {
+                TELEGRAM_FINAL_SUFFIX: this.options.finalSuffix,
+                TELEGRAM_NO_RESULT_TEXT: this.options.noResultText,
+              },
+            );
+            alive();
+            state = "complete";
+            cooldown = 2000;
+            return result;
+          } catch (e) {
+            if (e instanceof AppError && e.code === "PARTIAL") continue;
+            throw e;
+          }
+        }
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => {
+            clearTimeout(timer);
+            reject(new BridgeError("TIMEOUT", 504));
+          };
+          const timer = setTimeout(() => {
+            signal.removeEventListener("abort", abort);
+            resolve();
+          }, this.options.pollMs ?? 500);
+          if (signal.aborted) abort();
+          else signal.addEventListener("abort", abort, { once: true });
+        });
+      }
+      throw new BridgeError("TIMEOUT", 504);
+    } catch (e) {
+      if (e instanceof BridgeError) throw e;
+      if (e instanceof AppError) throw new BridgeError(e.code, e.status);
+      const error = e as {
+        errorMessage?: string;
+        seconds?: number;
+        name?: string;
+      };
+      if (
+        signal.aborted ||
+        error?.name === "TimeoutError" ||
+        error?.name === "AbortError"
+      )
+        throw new BridgeError("TIMEOUT", 504);
+      if (/^FLOOD_WAIT/.test(error?.errorMessage ?? "")) {
+        cooldown = Math.min(
+          86400000,
+          Math.max(60000, Number(error.seconds || 60) * 1000),
+        );
+        throw new BridgeError("TELEGRAM_RATE_LIMIT", 429);
+      }
+      throw new BridgeError("TELEGRAM_FAILURE");
+    } finally {
+      try {
+        await this.transport.close?.();
+      } finally {
+        await this.ledger.finish(input.requestId, state, cooldown);
+      }
+    }
+  }
+}

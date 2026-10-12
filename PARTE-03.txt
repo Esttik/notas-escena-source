@@ -1,0 +1,904 @@
+ =====
+CREATE TABLE bridge_requests (
+  id uuid PRIMARY KEY,
+  fingerprint text NOT NULL,
+  status text NOT NULL,
+  created bigint NOT NULL
+);
+CREATE INDEX bridge_requests_created ON bridge_requests(created);
+CREATE TABLE bridge_lock (
+  id integer PRIMARY KEY CHECK (id = 1),
+  request_id uuid,
+  lease bigint NOT NULL DEFAULT 0,
+  cooldown bigint NOT NULL DEFAULT 0
+);
+INSERT INTO bridge_lock(id) VALUES(1);
+CREATE TABLE bridge_limits (
+  id bigint PRIMARY KEY,
+  count integer NOT NULL
+);
+
+===== FIN: bridge/netlify/database/migrations/20261012013000_bridge_ledger.sql =====
+
+
+===== ARCHIVO: bridge/netlify/functions/health.mts =====
+import type { Config } from "@netlify/functions";
+const health = async () =>
+  Response.json(
+    { ok: true, service: "telegram-user-bridge", version: "netlify-1" },
+    {
+      headers: {
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Robots-Tag": "noindex, nofollow",
+      },
+    },
+  );
+export default health;
+export const config: Config = { path: "/health" };
+
+===== FIN: bridge/netlify/functions/health.mts =====
+
+
+===== ARCHIVO: bridge/netlify/functions/lookup.mts =====
+import type { Config } from "@netlify/functions";
+import { getDatabase } from "@netlify/database";
+import { CloudLedger, type SqlPool } from "../../src/cloud-ledger.ts";
+import { BridgeEngine } from "../../src/engine.ts";
+import { makeClient, UserTransport } from "../../src/telegram-client.ts";
+import { unseal } from "../../src/vault.ts";
+import { createCloudHandler } from "../../src/cloud-http.ts";
+const env = (name: string) => process.env[name] ?? "";
+const decoded = (name: string) =>
+  Buffer.from(env(name), "base64").toString("utf8");
+class CloudTransport extends UserTransport {
+  async verify(signal: AbortSignal) {
+    const stop = () => {
+      void this.client.disconnect();
+    };
+    signal.addEventListener("abort", stop, { once: true });
+    try {
+      await this.client.connect();
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      return await super.verify(signal);
+    } finally {
+      signal.removeEventListener("abort", stop);
+    }
+  }
+  async close() {
+    await this.client.disconnect();
+  }
+}
+export default createCloudHandler(
+  async (input, signal) => {
+    const database = getDatabase();
+    const ledger = new CloudLedger(database.pool as SqlPool, env("BRIDGE_BEARER_TOKEN"));
+    const client = makeClient(
+      unseal(
+        decoded("TELEGRAM_SESSION_ENCRYPTED_BASE64"),
+        env("BRIDGE_ENCRYPTION_KEY"),
+      ),
+    );
+    const engine = new BridgeEngine(new CloudTransport(client), ledger, {
+      finalSuffix: decoded("TELEGRAM_FINAL_SUFFIX_BASE64"),
+      noResultText: env("TELEGRAM_NO_RESULT_TEXT") || undefined,
+    });
+    try { return await engine.lookup(input, signal); }
+    finally { await database.pool.end(); }
+  },
+  () => ({
+    secret: env("BRIDGE_BEARER_TOKEN"),
+    holder: JSON.parse(decoded("BRIDGE_HOLDER_BASE64") || "null"),
+  }),
+);
+export const config: Config = { path: "/lookup" };
+
+===== FIN: bridge/netlify/functions/lookup.mts =====
+
+
+===== ARCHIVO: bridge/netlify.env.example =====
+# Netlify: Functions scope, production context, mark each value secret.
+# Empty placeholders: never put real values in this example or Git.
+TELEGRAM_API_ID=
+TELEGRAM_API_HASH=
+BRIDGE_ENCRYPTION_KEY=
+BRIDGE_BEARER_TOKEN=
+# Base64 of the AES-256-GCM session.enc envelope, not an unencrypted session.
+TELEGRAM_SESSION_ENCRYPTED_BASE64=
+# Base64 of the holder.json created after the owner's authorized fresh login.
+BRIDGE_HOLDER_BASE64=
+# Base64 of the exact final line of an authorized, validated bot response.
+TELEGRAM_FINAL_SUFFIX_BASE64=
+# Optional, only after confirming the provider's exact no-result protocol.
+TELEGRAM_NO_RESULT_TEXT=
+# Non-secret, set using Netlify UI/CLI; not in netlify.toml.
+AWS_LAMBDA_JS_RUNTIME=nodejs24.x
+
+===== FIN: bridge/netlify.env.example =====
+
+
+===== ARCHIVO: bridge/netlify.toml =====
+[build]
+  publish = "public"
+  command = "npm run typecheck"
+[build.environment]
+  NODE_VERSION = "24"
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  external_node_modules = ["teleproto"]
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+    Content-Security-Policy = "default-src 'none'; frame-ancestors 'none'"
+
+===== FIN: bridge/netlify.toml =====
+
+
+===== ARCHIVO: bridge/package-lock.json =====
+{
+  "name": "notas-escena-telegram-user-bridge",
+  "version": "0.1.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "notas-escena-telegram-user-bridge",
+      "version": "0.1.0",
+      "dependencies": {
+        "@netlify/database": "2.0.1",
+        "@netlify/functions": "6.0.2",
+        "teleproto": "1.230.0"
+      },
+      "devDependencies": {
+        "big-integer": "1.6.52"
+      },
+      "engines": {
+        "node": ">=24"
+      }
+    },
+    "node_modules/@cifrante/darwin-arm64": {
+      "version": "0.5.1",
+      "resolved": "https://registry.npmjs.org/@cifrante/darwin-arm64/-/darwin-arm64-0.5.1.tgz",
+      "integrity": "sha512-EbHhxuZiJZvBd0189id//loVXQ6C/c/Q6hlPlGmvOGb3ZLY6+WtkRKDpYkf1N14uXSCEqjpdIB1tycPYCRSwGA==",
+      "cpu": [
+        "arm64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ]
+    },
+    "node_modules/@cifrante/darwin-x64": {
+      "version": "0.5.1",
+      "resolved": "https://registry.npmjs.org/@cifrante/darwin-x64/-/darwin-x64-0.5.1.tgz",
+      "integrity": "sha512-DhOK5XPKtCWzHyAVlNYx6PqWFu3zfFnaLIdl7wi+abOKaX2kQT9kc9NGdBO2IvwLqYmMJZAxW6FoNG8sGPsr4g==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ]
+    },
+    "node_modules/@cifrante/linux-arm64-gnu": {
+      "version": "0.5.1",
+      "resolved": "https://registry.npmjs.org/@cifrante/linux-arm64-gnu/-/linux-arm64-gnu-0.5.1.tgz",
+      "integrity": "sha512-McK2jBbonyqa4oVnghglZnSEEaf5Ek1EV0JKid9NLO0+ovBbjc4HnwS+FEpnPyZiE7GbPMj/Brlhj8Ws/S8Ifg==",
+      "cpu": [
+        "arm64"
+      ],
+      "libc": [
+        "glibc"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@cifrante/linux-arm64-musl": {
+      "version": "0.5.1",
+      "resolved": "https://registry.npmjs.org/@cifrante/linux-arm64-musl/-/linux-arm64-musl-0.5.1.tgz",
+      "integrity": "sha512-QPnoBbGqp0PUxihF1ukFuHmi2yMnY4vZJRoHKhy/u4RoDw/Cj1ziMXhR15sYq6CZcSLE9+tD6lwOXORo65ZIwQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "libc": [
+        "musl"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@cifrante/linux-x64-gnu": {
+      "version": "0.5.1",
+      "resolved": "https://registry.npmjs.org/@cifrante/linux-x64-gnu/-/linux-x64-gnu-0.5.1.tgz",
+      "integrity": "sha512-4iKGBgw3SuiwSkXV3tU8PImsoMCEY35P47csS08xu/Ng8OK3/QlzEerdxnirRCeos2B0kjhyYRqrPlGyAz94mg==",
+      "cpu": [
+        "x64"
+      ],
+      "libc": [
+        "glibc"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@cifrante/linux-x64-musl": {
+      "version": "0.5.1",
+      "resolved": "https://registry.npmjs.org/@cifrante/linux-x64-musl/-/linux-x64-musl-0.5.1.tgz",
+      "integrity": "sha512-nVBgVpj/CCt+Tft0qkxHfsEX0IbA3pfEw8YGKFPgN1fcqstuKt/Zm/GvKmCL8DzuLR6Q+pceG4Kcn/eUEKlRqw==",
+      "cpu": [
+        "x64"
+      ],
+      "libc": [
+        "musl"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ]
+    },
+    "node_modules/@cifrante/win32-arm64": {
+      "version": "0.5.1",
+      "resolved": "https://registry.npmjs.org/@cifrante/win32-arm64/-/win32-arm64-0.5.1.tgz",
+      "integrity": "sha512-/6VvnQr5Nup/ovQSJSaCZ2+mhbZxmF8CPaOa1bgv+Fj6i9ld/SyuPhleCLWyPstvoZa1bmjbv/eZN2nYUyjxhQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ]
+    },
+    "node_modules/@cifrante/win32-x64": {
+      "version": "0.5.1",
+      "resolved": "https://registry.npmjs.org/@cifrante/win32-x64/-/win32-x64-0.5.1.tgz",
+      "integrity": "sha512-qvbffmosnliht9u70SauiRtTT4p03kJIrCwvKHyRokGc3Bo22Po9EqoghTycvbD298SNAfNs1czuM8BJm1CHmQ==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ]
+    },
+    "node_modules/@neondatabase/serverless": {
+      "version": "1.2.0",
+      "resolved": "https://registry.npmjs.org/@neondatabase/serverless/-/serverless-1.2.0.tgz",
+      "integrity": "sha512-tnaqgixUengZQNd9ZrS3ytQfamJzLKY8QxgqWQTNHHtB+KrFQWk77JTbbpg4RD+J3qE4eO2lVytvGDX5Kj6FdQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=19.0.0"
+      }
+    },
+    "node_modules/@netlify/database": {
+      "version": "2.0.1",
+      "resolved": "https://registry.npmjs.org/@netlify/database/-/database-2.0.1.tgz",
+      "integrity": "sha512-ikz0NcVgeOe62Sic5MEFMyv/yMWtzhMLcynXTDftTL3rVEMoJL16mjnU9gNZ6G80lBngjjPjZrDOyAS1j+Kt3A==",
+      "license": "MIT",
+      "dependencies": {
+        "@neondatabase/serverless": "^1.1.0",
+        "@netlify/runtime-utils": "3.0.0",
+        "pg": "^8.13.0",
+        "waddler": "^0.1.1",
+        "ws": "^8.18.0"
+      },
+      "engines": {
+        "node": ">=22.12.0"
+      }
+    },
+    "node_modules/@netlify/functions": {
+      "version": "6.0.2",
+      "resolved": "https://registry.npmjs.org/@netlify/functions/-/functions-6.0.2.tgz",
+      "integrity": "sha512-JqbPgAOt2GAwzCEitdEWAHOn6AkZ0Rna401wdAyuDIBiDv9M03b3Cu5mGH7/eHOmIXfZIcN1pG35flHjfu6asQ==",
+      "license": "MIT",
+      "dependencies": {
+        "@netlify/types": "3.2.0"
+      },
+      "engines": {
+        "node": ">=22.12.0"
+      }
+    },
+    "node_modules/@netlify/runtime-utils": {
+      "version": "3.0.0",
+      "resolved": "https://registry.npmjs.org/@netlify/runtime-utils/-/runtime-utils-3.0.0.tgz",
+      "integrity": "sha512-OHo40+V3QZkR+UrDjqhN+LekrAby/dSSJxsvyYs9i88E/mSl3goB/ysoL+VYROm190egxmQyRYlHK7vL4GeHBQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=22.12.0"
+      }
+    },
+    "node_modules/@netlify/types": {
+      "version": "3.2.0",
+      "resolved": "https://registry.npmjs.org/@netlify/types/-/types-3.2.0.tgz",
+      "integrity": "sha512-PVvY1EEN9i2Er0LQoiyNG7i/BnwnttLuZqIkBnhL2Jrcj3P5N/NcGkv1i20MJ2ngNGSPQcT7tagDmF3V6BsdWg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=22.12.0"
+      }
+    },
+    "node_modules/big-integer": {
+      "version": "1.6.52",
+      "resolved": "https://registry.npmjs.org/big-integer/-/big-integer-1.6.52.tgz",
+      "integrity": "sha512-QxD8cf2eVqJOOz63z6JIN9BzvVs/dlySa5HGSBH5xtR8dPteIRQnBxxKqkNTiT6jbDTF6jAfrd4oMcND9RGbQg==",
+      "license": "Unlicense",
+      "engines": {
+        "node": ">=0.6"
+      }
+    },
+    "node_modules/cifrante": {
+      "version": "0.5.1",
+      "resolved": "https://registry.npmjs.org/cifrante/-/cifrante-0.5.1.tgz",
+      "integrity": "sha512-twUYiWNbXnqUSc6MJ/lDwLRg9dur783Kfp3CawmEwemN8sKRsHBzS99DXYus0nkanDo67FQ5tyyKpAWTz8Ml0g==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=18"
+      },
+      "optionalDependencies": {
+        "@cifrante/darwin-arm64": "0.5.1",
+        "@cifrante/darwin-x64": "0.5.1",
+        "@cifrante/linux-arm64-gnu": "0.5.1",
+        "@cifrante/linux-arm64-musl": "0.5.1",
+        "@cifrante/linux-x64-gnu": "0.5.1",
+        "@cifrante/linux-x64-musl": "0.5.1",
+        "@cifrante/win32-arm64": "0.5.1",
+        "@cifrante/win32-x64": "0.5.1"
+      }
+    },
+    "node_modules/graceful-fs": {
+      "version": "4.2.11",
+      "resolved": "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz",
+      "integrity": "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==",
+      "license": "ISC"
+    },
+    "node_modules/imurmurhash": {
+      "version": "0.1.4",
+      "resolved": "https://registry.npmjs.org/imurmurhash/-/imurmurhash-0.1.4.tgz",
+      "integrity": "sha512-JmXMZ6wuvDmLiHEml9ykzqO6lwFbof0GG4IkcGaENdCRDDmMVnny7s5HsIgHCbaq0w2MyPhDqkhTUgS2LU2PHA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=0.8.19"
+      }
+    },
+    "node_modules/ip-address": {
+      "version": "10.7.4",
+      "resolved": "https://registry.npmjs.org/ip-address/-/ip-address-10.7.4.tgz",
+      "integrity": "sha512-DWBMKyeM25D70nrIiTkgQth59/G+naKOTep6huF9j+GmeK3DMD60Zvxg5d5qQnz+38AHgou6ean2LECX+lrKDg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 12"
+      }
+    },
+    "node_modules/mime": {
+      "version": "3.0.0",
+      "resolved": "https://registry.npmjs.org/mime/-/mime-3.0.0.tgz",
+      "integrity": "sha512-jSCU7/VB1loIWBZe14aEYHU/+1UMEHoaO7qxCOVJOw9GgH72VAWppxNcjU+x9a2k3GSIBXNKxXQFqRvvZ7vr3A==",
+      "license": "MIT",
+      "bin": {
+        "mime": "cli.js"
+      },
+      "engines": {
+        "node": ">=10.0.0"
+      }
+    },
+    "node_modules/node-localstorage": {
+      "version": "2.2.1",
+      "resolved": "https://registry.npmjs.org/node-localstorage/-/node-localstorage-2.2.1.tgz",
+      "integrity": "sha512-vv8fJuOUCCvSPjDjBLlMqYMHob4aGjkmrkaE42/mZr0VT+ZAU10jRF8oTnX9+pgU9/vYJ8P7YT3Vd6ajkmzSCw==",
+      "license": "MIT",
+      "dependencies": {
+        "write-file-atomic": "^1.1.4"
+      },
+      "engines": {
+        "node": ">=0.12"
+      }
+    },
+    "node_modules/pg": {
+      "version": "8.23.1",
+      "resolved": "https://registry.npmjs.org/pg/-/pg-8.23.1.tgz",
+      "integrity": "sha512-aL96AHANtWjPLDOLqnhx+ngp9+UK7ETEU8VJrDCGvsSSi/mGLcWYsS6Herg7lmaBJe4uwrfqsa7gTEFaSizDoQ==",
+      "license": "MIT",
+      "dependencies": {
+        "pg-connection-string": "^2.14.1",
+        "pg-pool": "^3.14.0",
+        "pg-protocol": "^1.16.1",
+        "pg-types": "2.2.0",
+        "pgpass": "1.0.5"
+      },
+      "engines": {
+        "node": ">= 16.0.0"
+      },
+      "optionalDependencies": {
+        "pg-cloudflare": "^1.4.1"
+      },
+      "peerDependencies": {
+        "pg-native": ">=3.0.1"
+      },
+      "peerDependenciesMeta": {
+        "pg-native": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/pg-cloudflare": {
+      "version": "1.4.1",
+      "resolved": "https://registry.npmjs.org/pg-cloudflare/-/pg-cloudflare-1.4.1.tgz",
+      "integrity": "sha512-6PQbsFWZcp9EmJEwy5cGQ2La+AMWpP46lgbb8X+U/XsHIUweYDNCpeuKck5RxL2MdVFi7krbbEi5nX4Zh7JhrQ==",
+      "license": "MIT",
+      "optional": true
+    },
+    "node_modules/pg-connection-string": {
+      "version": "2.14.1",
+      "resolved": "https://registry.npmjs.org/pg-connection-string/-/pg-connection-string-2.14.1.tgz",
+      "integrity": "sha512-qR3kGNPBLpCNtz0evbKA0Y/MRFXwSSdT+pTJvYp/bXTcReZbvX1kzF0IyTc1QnxqF7AZbOeBhNL8R5mYQZV/MA==",
+      "license": "MIT"
+    },
+    "node_modules/pg-int8": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/pg-int8/-/pg-int8-1.0.1.tgz",
+      "integrity": "sha512-WCtabS6t3c8SkpDBUlb1kjOs7l66xsGdKpIPZsg4wR+B3+u9UAum2odSsF9tnvxg80h4ZxLWMy4pRjOsFIqQpw==",
+      "license": "ISC",
+      "engines": {
+        "node": ">=4.0.0"
+      }
+    },
+    "node_modules/pg-pool": {
+      "version": "3.14.0",
+      "resolved": "https://registry.npmjs.org/pg-pool/-/pg-pool-3.14.0.tgz",
+      "integrity": "sha512-gKtPkFdQPU3DksooVLi9LsjZxrsBUZIpa+7aVx+LV5pNh0KzP4Zleud2po+ConrxbuXGBJ6Hfer6hdgpIBpBaw==",
+      "license": "MIT",
+      "peerDependencies": {
+        "pg": ">=8.0"
+      }
+    },
+    "node_modules/pg-protocol": {
+      "version": "1.16.1",
+      "resolved": "https://registry.npmjs.org/pg-protocol/-/pg-protocol-1.16.1.tgz",
+      "integrity": "sha512-p9VOFMiHB/ZbJATetbg+99PxssTVSQRnyuPSQ67mN1+1KBOjZaZ83ZQzltnxPhJwSsC3nwVjJ10DVJlerbFzLg==",
+      "license": "MIT"
+    },
+    "node_modules/pg-types": {
+      "version": "2.2.0",
+      "resolved": "https://registry.npmjs.org/pg-types/-/pg-types-2.2.0.tgz",
+      "integrity": "sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA==",
+      "license": "MIT",
+      "dependencies": {
+        "pg-int8": "1.0.1",
+        "postgres-array": "~2.0.0",
+        "postgres-bytea": "~1.0.0",
+        "postgres-date": "~1.0.4",
+        "postgres-interval": "^1.1.0"
+      },
+      "engines": {
+        "node": ">=4"
+      }
+    },
+    "node_modules/pgpass": {
+      "version": "1.0.5",
+      "resolved": "https://registry.npmjs.org/pgpass/-/pgpass-1.0.5.tgz",
+      "integrity": "sha512-FdW9r/jQZhSeohs1Z3sI1yxFQNFvMcnmfuj4WBMUTxOrAyLMaTcE1aAMBiTlbMNaXvBCQuVi0R7hd8udDSP7ug==",
+      "license": "MIT",
+      "dependencies": {
+        "split2": "^4.1.0"
+      }
+    },
+    "node_modules/postgres-array": {
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/postgres-array/-/postgres-array-2.0.0.tgz",
+      "integrity": "sha512-VpZrUqU5A69eQyW2c5CA1jtLecCsN2U/bD6VilrFDWq5+5UIEVO7nazS3TEcHf1zuPYO/sqGvUvW62g86RXZuA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=4"
+      }
+    },
+    "node_modules/postgres-bytea": {
+      "version": "1.0.1",
+      "resolved": "https://registry.npmjs.org/postgres-bytea/-/postgres-bytea-1.0.1.tgz",
+      "integrity": "sha512-5+5HqXnsZPE65IJZSMkZtURARZelel2oXUEO8rH83VS/hxH5vv1uHquPg5wZs8yMAfdv971IU+kcPUczi7NVBQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=0.10.0"
+      }
+    },
+    "node_modules/postgres-date": {
+      "version": "1.0.7",
+      "resolved": "https://registry.npmjs.org/postgres-date/-/postgres-date-1.0.7.tgz",
+      "integrity": "sha512-suDmjLVQg78nMK2UZ454hAG+OAW+HQPZ6n++TNDUX+L0+uUlLywnoxJKDou51Zm+zTCjrCl0Nq6J9C5hP9vK/Q==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=0.10.0"
+      }
+    },
+    "node_modules/postgres-interval": {
+      "version": "1.2.0",
+      "resolved": "https://registry.npmjs.org/postgres-interval/-/postgres-interval-1.2.0.tgz",
+      "integrity": "sha512-9ZhXKM/rw350N1ovuWHbGxnGh/SNJ4cnxHiM0rxE4VN41wsg8P8zWn9hv/buK00RP4WvlOyr/RBDiptyxVbkZQ==",
+      "license": "MIT",
+      "dependencies": {
+        "xtend": "^4.0.0"
+      },
+      "engines": {
+        "node": ">=0.10.0"
+      }
+    },
+    "node_modules/slide": {
+      "version": "1.1.6",
+      "resolved": "https://registry.npmjs.org/slide/-/slide-1.1.6.tgz",
+      "integrity": "sha512-NwrtjCg+lZoqhFU8fOwl4ay2ei8PaqCBOUV3/ektPY9trO1yQ1oXEfmHAhKArUVUr/hOHvy5f6AdP17dCM0zMw==",
+      "license": "ISC",
+      "engines": {
+        "node": "*"
+      }
+    },
+    "node_modules/smart-buffer": {
+      "version": "4.2.0",
+      "resolved": "https://registry.npmjs.org/smart-buffer/-/smart-buffer-4.2.0.tgz",
+      "integrity": "sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">= 6.0.0",
+        "npm": ">= 3.0.0"
+      }
+    },
+    "node_modules/socks": {
+      "version": "2.8.10",
+      "resolved": "https://registry.npmjs.org/socks/-/socks-2.8.10.tgz",
+      "integrity": "sha512-e0VyvkVTwVYViNovRkZ9aodhxVlyoMn7eJhVUPxZ+eK9P/7CBkxvvsBOHqFPEH416726W8tLXXXjKwqgTErrCQ==",
+      "license": "MIT",
+      "dependencies": {
+        "ip-address": "^10.1.1",
+        "smart-buffer": "^4.2.0"
+      },
+      "engines": {
+        "node": ">= 10.0.0",
+        "npm": ">= 3.0.0"
+      }
+    },
+    "node_modules/split2": {
+      "version": "4.2.0",
+      "resolved": "https://registry.npmjs.org/split2/-/split2-4.2.0.tgz",
+      "integrity": "sha512-UcjcJOWknrNkF6PLX83qcHM6KHgVKNkV62Y8a5uYDVv9ydGQVwAHMKqHdJje1VTWpljG0WYpCDhrCdAOYH4TWg==",
+      "license": "ISC",
+      "engines": {
+        "node": ">= 10.x"
+      }
+    },
+    "node_modules/store2": {
+      "version": "2.14.4",
+      "resolved": "https://registry.npmjs.org/store2/-/store2-2.14.4.tgz",
+      "integrity": "sha512-srTItn1GOvyvOycgxjAnPA63FZNwy0PTyUBFMHRM+hVFltAeoh0LmNBz9SZqUS9mMqGk8rfyWyXn3GH5ReJ8Zw==",
+      "license": "MIT"
+    },
+    "node_modules/teleproto": {
+      "version": "1.230.0",
+      "resolved": "https://registry.npmjs.org/teleproto/-/teleproto-1.230.0.tgz",
+      "integrity": "sha512-sX8Xr6BV7Hz/BMU6ZkkgBDhs/2Qnv9g1sf+NLt860piR68SptrDLrUPdWfCrEJpgFAtz8f+pXycrnQyvPanvSQ==",
+      "license": "MIT",
+      "dependencies": {
+        "big-integer": "^1.6.48",
+        "cifrante": "0.5.1",
+        "mime": "^3.0.0",
+        "node-localstorage": "^2.2.1",
+        "socks": "^2.6.2",
+        "store2": "^2.13.0"
+      },
+      "engines": {
+        "node": ">=18"
+      },
+      "funding": {
+        "type": "github",
+        "url": "https://github.com/sponsors/sanyok12345"
+      }
+    },
+    "node_modules/waddler": {
+      "version": "0.1.1",
+      "resolved": "https://registry.npmjs.org/waddler/-/waddler-0.1.1.tgz",
+      "integrity": "sha512-lBJXYFBLEpYe+scAeCJmLj6Iqweuq1whM6Am3I9WfopOCFxvKz8Nq5hXoy8/b3zwJqHIQMglFIvM4skRydSpZg==",
+      "license": "MIT",
+      "peerDependencies": {
+        "@clickhouse/client": "^1.11.2",
+        "@duckdb/node-api": "^1.1.2-alpha.4",
+        "@electric-sql/pglite": "^0.2.17",
+        "@libsql/client": "^0.15.4",
+        "@libsql/client-wasm": "^0.15.4",
+        "@neondatabase/serverless": "^1.0.0",
+        "@planetscale/database": "^1.19.0",
+        "@tidbcloud/serverless": "^0.2.0",
+        "@vercel/postgres": "^0.10.0",
+        "@xata.io/client": "^0.30.1",
+        "better-sqlite3": "^11.9.1",
+        "bun-types": "*",
+        "duckdb": "^1.2.1",
+        "gel": "^2.0.2",
+        "mysql2": "^3.14.0",
+        "pg": "^8.14.0",
+        "pg-query-stream": "^4.8.0",
+        "postgres": "^3.4.5"
+      },
+      "peerDependenciesMeta": {
+        "@clickhouse/client": {
+          "optional": true
+        },
+        "@cloudflare/workers-types": {
+          "optional": true
+        },
+        "@duckdb/node-api": {
+          "optional": true
+        },
+        "@electric-sql/pglite": {
+          "optional": true
+        },
+        "@libsql/client": {
+          "optional": true
+        },
+        "@libsql/client-wasm": {
+          "optional": true
+        },
+        "@neondatabase/serverless": {
+          "optional": true
+        },
+        "@op-engineering/op-sqlite": {
+          "optional": true
+        },
+        "@planetscale/database": {
+          "optional": true
+        },
+        "@tidbcloud/serverless": {
+          "optional": true
+        },
+        "@vercel/postgres": {
+          "optional": true
+        },
+        "@xata.io/client": {
+          "optional": true
+        },
+        "better-sqlite3": {
+          "optional": true
+        },
+        "bun-types": {
+          "optional": true
+        },
+        "duckdb": {
+          "optional": true
+        },
+        "gel": {
+          "optional": true
+        },
+        "mysql2": {
+          "optional": true
+        },
+        "pg": {
+          "optional": true
+        },
+        "pg-query-stream": {
+          "optional": true
+        },
+        "postgres": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/write-file-atomic": {
+      "version": "1.3.4",
+      "resolved": "https://registry.npmjs.org/write-file-atomic/-/write-file-atomic-1.3.4.tgz",
+      "integrity": "sha512-SdrHoC/yVBPpV0Xq/mUZQIpW2sWXAShb/V4pomcJXh92RuaO+f3UTWItiR3Px+pLnV2PvC2/bfn5cwr5X6Vfxw==",
+      "license": "ISC",
+      "dependencies": {
+        "graceful-fs": "^4.1.11",
+        "imurmurhash": "^0.1.4",
+        "slide": "^1.1.5"
+      }
+    },
+    "node_modules/ws": {
+      "version": "8.22.0",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.22.0.tgz",
+      "integrity": "sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=10.0.0"
+      },
+      "peerDependencies": {
+        "bufferutil": "^4.0.1",
+        "utf-8-validate": ">=5.0.2"
+      },
+      "peerDependenciesMeta": {
+        "bufferutil": {
+          "optional": true
+        },
+        "utf-8-validate": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/xtend": {
+      "version": "4.0.2",
+      "resolved": "https://registry.npmjs.org/xtend/-/xtend-4.0.2.tgz",
+      "integrity": "sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=0.4"
+      }
+    }
+  }
+}
+
+===== FIN: bridge/package-lock.json =====
+
+
+===== ARCHIVO: bridge/package.json =====
+{
+  "name": "notas-escena-telegram-user-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "login": "node --env-file-if-exists=.env --experimental-strip-types src/login.ts",
+    "setup": "node --env-file-if-exists=.env --experimental-strip-types src/setup.ts",
+    "start": "node --env-file-if-exists=.env --experimental-strip-types src/server.ts",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@netlify/database": "2.0.1",
+    "@netlify/functions": "6.0.2",
+    "teleproto": "1.230.0"
+  },
+  "devDependencies": {
+    "big-integer": "1.6.52"
+  }
+}
+
+===== FIN: bridge/package.json =====
+
+
+===== ARCHIVO: bridge/public/index.html =====
+<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Notas Escena</title><body><h1>Notas Escena</h1><p>Servicio de conexión. Abre tu aplicación privada de notas para preparar una actuación.</p></body></html>
+
+===== FIN: bridge/public/index.html =====
+
+
+===== ARCHIVO: bridge/src/cloud-http.ts =====
+import { createHash, timingSafeEqual } from "node:crypto";
+import {
+  AppError,
+  normalizePhone,
+  validateResult,
+  type QueryResult,
+} from "../../lib/domain.ts";
+import { BridgeError } from "./errors.ts";
+export type CloudInput = {
+  requestId: string;
+  sessionId: string;
+  phone: string;
+};
+type Lookup = (input: CloudInput, signal: AbortSignal) => Promise<QueryResult>;
+export type Holder = {
+  phone: string;
+  scope: string;
+  consentRef: string;
+  ownershipVerifiedAt: string;
+  expiresAt: string;
+};
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export function validateHolder(value: unknown): Holder {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new BridgeError("CONSENT_CONFIG", 503);
+  const h = value as Holder;
+  if (
+    typeof h.phone !== "string" ||
+    normalizePhone(h.phone) !== h.phone ||
+    h.scope !== "lookup" ||
+    typeof h.consentRef !== "string" ||
+    !/^owner-login:[a-f0-9-]{36}$/.test(h.consentRef) ||
+    !Number.isFinite(Date.parse(h.ownershipVerifiedAt)) ||
+    Date.parse(h.ownershipVerifiedAt) > Date.now() ||
+    !Number.isFinite(Date.parse(h.expiresAt)) ||
+    Date.parse(h.expiresAt) <= Date.now() ||
+    Date.parse(h.expiresAt) - Date.parse(h.ownershipVerifiedAt) >
+      7 * 86400000 + 1000
+  )
+    throw new BridgeError("CONSENT_EXPIRED_OR_INVALID", 403);
+  return h;
+}
+function response(status: number, value: unknown) {
+  return Response.json(value, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+      "X-Robots-Tag": "noindex, nofollow",
+      "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+    },
+  });
+}
+async function readBody(req: Request) {
+  if (Number(req.headers.get("content-length")) > 2048)
+    throw new BridgeError("BODY_LIMIT", 413);
+  const reader = req.body?.getReader();
+  if (!reader) throw new BridgeError("INPUT", 400);
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > 2048) {
+        await reader.cancel();
+        throw new BridgeError("BODY_LIMIT", 413);
+      }
+      chunks.push(part.value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  } catch (e) {
+    if (e instanceof BridgeError) throw e;
+    throw new BridgeError("INPUT", 400);
+  } finally {
+    reader.releaseLock();
+  }
+}
+export function createCloudHandler(
+  lookup: Lookup,
+  getConfig: () => { secret: string; holder: unknown },
+) {
+  return async (req: Request) => {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 11000);
+    const cancel = () => abort.abort();
+    req.signal.addEventListener("abort", cancel, { once: true });
+    if (req.signal.aborted) abort.abort();
+    try {
+      const { secret, holder } = getConfig();
+      if (secret.length < 40) throw new BridgeError("BEARER_CONFIG", 503);
+      const hash = (v: string) => createHash("sha256").update(v).digest();
+      if (
+        !timingSafeEqual(
+          hash(req.headers.get("authorization") ?? ""),
+          hash(`Bearer ${secret}`),
+        )
+      )
+        throw new BridgeError("UNAUTHORIZED", 401);
+      if (req.headers.has("origin")) throw new BridgeError("ORIGIN", 403);
+      if (
+        req.method !== "POST" ||
+        !["/lookup", "/.netlify/functions/lookup"].includes(
+          new URL(req.url).pathname,
+        )
+      )
+        throw new BridgeError("NOT_FOUND", 404);
+      if (req.headers.get("content-type") !== "application/json")
+        throw new BridgeError("CONTENT_TYPE", 415);
+      const value = await readBody(req);
+      if (!value || typeof value !== "object" || Array.isArray(value))
+        throw new BridgeError("INPUT", 400);
+      const input = value as CloudInput;
+      if (
+        Object.keys(value).sort().join(",") !== "phone,requestId,sessionId" ||
+        typeof input.phone !== "string" ||
+        typeof input.requestId !== "string" ||
+        typeof input.sessionId !== "string" ||
+        !UUID.test(input.requestId) ||
+        !UUID.test(input.sessionId) ||
+        req.headers.get("idempotency-key") !== input.requestId ||
+        normalizePhone(input.phone) !== input.phone
+      )
+        throw new Bridg

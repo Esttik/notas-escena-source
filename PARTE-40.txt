@@ -1,0 +1,919 @@
+==
+
+
+===== ARCHIVO: tests/browser/automatic.spec.ts =====
+import { test, expect } from "playwright/test";
+test.use({ serviceWorkers: "block" });
+test("detección estable, autorización, respuesta reservada y descarte por revisión", async ({
+  page,
+}) => {
+  let requests = 0;
+  page.on("request", (r) => {
+    if (r.url().endsWith("/api/query")) requests++;
+  });
+  await page.goto("/signin-with-chatgpt?return_to=/");
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  const text = page.getByRole("textbox", { name: "Texto de la nota" });
+  await text.fill("600000001");
+  await page.waitForTimeout(1000);
+  expect(requests).toBe(0); // no artist session
+  await page.locator(".link-tool").tap();
+  await expect(
+    page.getByRole("heading", { name: "Área del artista", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("checkbox")).toHaveCount(2);
+  for (const participant of await page.getByRole("checkbox").all())
+    await participant.check();
+  await page
+    .getByRole("button", { name: "Preparar sesión", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  for (const value of ["60000000", "611111111", "600000001 700000002"]) {
+    await text.fill(value);
+    await page.waitForTimeout(950);
+  }
+  expect(requests).toBe(0);
+  await text.fill("600000001");
+  await page.waitForTimeout(300);
+  await text.fill("6000000012"); // edits before the stable timer cancel transmission
+  await page.waitForTimeout(1000);
+  expect(requests).toBe(0);
+  await text.fill("+34 600 000 001");
+  const link = page.locator(".link-tool");
+  await expect(link).toHaveAttribute("aria-label", "Eslabones: recibido");
+  await expect(text).toHaveText("+34 600 000 001");
+  expect(requests).toBe(1);
+  // Safari may commit a duplicate input event when the keyboard focus changes.
+  await text.dispatchEvent("input", { bubbles: true });
+  await expect(link).toHaveAttribute("aria-label", "Eslabones: recibido");
+  await text.press("ControlOrMeta+End");
+  await page.keyboard.insertText("\nEnsayo"); // same phone, different revision: discard, no automatic retry
+  await page.waitForTimeout(1100);
+  expect(requests).toBe(1);
+  await expect(link).toHaveAttribute("aria-label", "Eslabones: preparado");
+  const originalText = await text.innerText();
+  await link.tap(); // explicit query starts, release must prevent late revelation
+  await expect(link).toHaveAttribute("aria-label", "Eslabones: recibido");
+  await expect(page.locator(".peek-result")).toHaveCount(0);
+  expect(await text.innerText()).toBe(originalText);
+  expect(requests).toBe(2);
+  const position = await link.boundingBox();
+  await page.mouse.move(
+    position!.x + position!.width / 2,
+    position!.y + position!.height / 2,
+  );
+  await page.mouse.down();
+  await expect(page.locator(".peek-result")).toContainText(
+    "Nombre: Alba Ejemplo",
+  );
+  expect(await text.innerText()).toBe(originalText);
+  expect(await text.evaluate((el) => el === document.activeElement)).toBe(true);
+  await page.mouse.move(2, 2); // release outside the control is still captured
+  await page.mouse.up();
+  await expect(page.locator(".peek-result")).toHaveCount(0);
+  await link.dispatchEvent("pointerdown", {
+    pointerId: 2,
+    isPrimary: true,
+    pointerType: "touch",
+    button: 0,
+  });
+  await expect(page.locator(".peek-result")).toContainText(
+    "Nombre: Alba Ejemplo",
+  );
+  await link.dispatchEvent("pointercancel", {
+    pointerId: 2,
+    pointerType: "touch",
+  });
+  await expect(page.locator(".peek-result")).toHaveCount(0);
+  expect(requests).toBe(2);
+  await text.fill("700000002");
+  await expect(link).toHaveAttribute("aria-label", "Eslabones: consultando");
+  const box = await link.boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.mouse.down();
+  await expect(page.locator(".peek-result")).toContainText(
+    "Nombre: Leo Ensayo",
+  );
+  await expect(text).toHaveText("700000002");
+  await page.mouse.up();
+  await expect(page.locator(".peek-result")).toHaveCount(0);
+  expect(requests).toBe(3);
+  // Keyboard activation follows the same hold/release contract.
+  await link.focus();
+  await page.keyboard.down("Space");
+  await expect(page.locator(".peek-result")).toContainText(
+    "Nombre: Leo Ensayo",
+  );
+  await page.keyboard.up("Space");
+  await expect(page.locator(".peek-result")).toHaveCount(0);
+  await page.keyboard.down("Space");
+  await expect(page.locator(".peek-result")).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect(page.locator(".peek-result")).toHaveCount(0);
+  await page.keyboard.up("Space");
+  expect(requests).toBe(3);
+});
+
+===== FIN: tests/browser/automatic.spec.ts =====
+
+
+===== ARCHIVO: tests/browser/flow.spec.ts =====
+import { test, expect } from "playwright/test";
+test("notas y actuación completa, duplicados, contexto, seguridad, deshacer y fallos", async ({
+  page,
+  playwright,
+}, testInfo) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => {
+    if (
+      m.type() === "error" &&
+      !m.text().includes("Failed to load resource") &&
+      !m.text().includes("Fetch API cannot load")
+    )
+      errors.push(m.text());
+  });
+  const response = await page.goto("/signin-with-chatgpt?return_to=/");
+  expect(response?.headers()["content-security-policy"]).toContain("nonce-");
+  expect(
+    response?.headers()["content-security-policy"].split("style-src")[0],
+  ).not.toContain("unsafe-inline");
+  const denied = await page.request.post("/api/session", {
+    headers: { Origin: "https://untrusted.example" },
+    data: { participantIds: ["demo-alba"] },
+  });
+  expect(denied.status()).toBe(403);
+  const anonymous = await playwright.request.newContext({
+    baseURL: process.env.TEST_BASE_URL ?? "http://127.0.0.1:5176",
+  });
+  expect((await anonymous.get("/api/config")).status()).toBe(401);
+  await anonymous.dispose();
+  await expect(
+    page.getByRole("heading", { name: "Notas", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("8 notas", { exact: true })).toBeVisible();
+  await page.screenshot({
+    path: `test-results/${testInfo.project.name}-list.png`,
+    fullPage: false,
+    scale: "css",
+  });
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  const writing = page.getByRole("textbox", { name: "Texto de la nota" });
+  await writing.fill("Nota de ensayo\nUn recordatorio ficticio");
+  await writing.press("ControlOrMeta+End");
+  await page.keyboard.insertText(" · añadido");
+  await expect(writing).toContainText("añadido");
+  await page.getByRole("button", { name: "Deshacer", exact: true }).click();
+  await expect(writing).toHaveText("Nota de ensayo\nUn recordatorio ficticio", {
+    useInnerText: true,
+  });
+  await page.getByRole("button", { name: "Opciones de nota" }).click();
+  await page.getByRole("button", { name: "Fijar nota", exact: true }).click();
+  await page.getByRole("button", { name: "Volver a las notas" }).click();
+  const search = page.getByRole("searchbox", { name: "Buscar notas" });
+  await search.fill("ensayo");
+  await expect(page.locator(".note-row")).toHaveCount(1);
+  await page.locator(".note-row").click();
+  await expect(writing).toContainText("recordatorio ficticio");
+  await page.getByRole("button", { name: "Opciones de nota" }).click();
+  await page
+    .getByRole("button", { name: "Eliminar nota", exact: true })
+    .click();
+  await expect(page.getByText("8 notas", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Menú y área del artista" }).click();
+  await expect(
+    page.getByText("Demostración · datos ficticios", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Preparar sesión", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  await writing.fill("600 000-001");
+  let requests = 0;
+  page.on("request", (r) => {
+    if (r.url().endsWith("/api/query")) requests++;
+  });
+  await expect(page.locator(".link-tool")).toHaveAttribute(
+    "aria-label",
+    "Eslabones: recibido",
+  );
+  await expect(writing).toHaveText("600 000-001");
+  expect(requests).toBe(1);
+  const firstBox = await page.locator(".link-tool").boundingBox();
+  await page.mouse.move(
+    firstBox!.x + firstBox!.width / 2,
+    firstBox!.y + firstBox!.height / 2,
+  );
+  await page.mouse.down();
+  await expect(page.locator(".peek-result")).toContainText(
+    "Nombre: Alba Ejemplo",
+  );
+  await expect(writing).toHaveText("600 000-001");
+  expect(requests).toBe(1);
+  expect(await writing.evaluate((el) => el === document.activeElement)).toBe(
+    true,
+  );
+  expect(
+    await page.evaluate(() => localStorage.getItem("notas-escena.ordinary.v1")),
+  ).not.toContain("Alba Ejemplo");
+  await page.screenshot({
+    path: `test-results/${testInfo.project.name}-editor.png`,
+    fullPage: false,
+    scale: "css",
+  });
+  await page.mouse.up();
+  await expect(page.locator(".peek-result")).toHaveCount(0);
+  await page.getByRole("button", { name: "Deshacer", exact: true }).click();
+  await expect(writing).toHaveText("600 000-001");
+  await page.locator(".link-tool").click();
+  await expect(page.locator(".link-tool")).toHaveAttribute("aria-busy", "true");
+  await writing.fill("700000002");
+  await expect(page.locator(".link-tool")).toHaveAttribute(
+    "aria-label",
+    "Eslabones: recibido",
+  );
+  await expect(writing).toHaveText("700000002");
+  expect(requests).toBe(3);
+  const secondBox = await page.locator(".link-tool").boundingBox();
+  await page.mouse.move(
+    secondBox!.x + secondBox!.width / 2,
+    secondBox!.y + secondBox!.height / 2,
+  );
+  await page.mouse.down();
+  await expect(page.locator(".peek-result")).toContainText(
+    "Nombre: Leo Ensayo",
+  );
+  await expect(writing).toHaveText("700000002");
+  await page.mouse.up();
+  await expect(page.locator(".peek-result")).toHaveCount(0);
+  await page.getByRole("button", { name: "Deshacer", exact: true }).click();
+  await page.locator(".link-tool").click();
+  await expect(page.locator(".link-tool")).toHaveAttribute("aria-busy", "true");
+  await page.getByRole("button", { name: "Volver a las notas" }).click();
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  await writing.fill("Una nota diferente");
+  await expect(page.locator(".link-tool")).toHaveAttribute(
+    "aria-busy",
+    "false",
+  );
+  await expect(writing).toHaveText("Una nota diferente");
+  await writing.fill("611111111");
+  await page.locator(".link-tool").click();
+  await expect(page.locator(".link-tool")).toHaveAttribute(
+    "aria-label",
+    "Eslabones: error",
+  );
+  await expect(writing).toHaveText("611111111");
+  await page.route("**/api/query", (route) => route.abort());
+  await writing.fill("600000001");
+  await expect(page.locator(".link-tool")).toHaveAttribute(
+    "aria-label",
+    "Eslabones: error",
+  );
+  await page.unroute("**/api/query");
+  await page.route("**/api/query", async (route) => {
+    const b = route.request().postDataJSON();
+    await route.fulfill({
+      json: {
+        ...b,
+        phone: "+34600000001",
+        status: "completado",
+        providerMs: 1,
+        result: {
+          requestId: b.requestId,
+          phone: "+34600000001",
+          final: true,
+          found: true,
+          name: "<script>window.COMPROMISED=true</script>",
+        },
+      },
+    });
+  });
+  await page.locator(".link-tool").click();
+  await expect(page.locator(".link-tool")).toHaveAttribute(
+    "aria-label",
+    "Eslabones: recibido",
+  );
+  const maliciousBox = await page.locator(".link-tool").boundingBox();
+  await page.mouse.move(
+    maliciousBox!.x + maliciousBox!.width / 2,
+    maliciousBox!.y + maliciousBox!.height / 2,
+  );
+  await page.mouse.down();
+  await expect(page.locator(".peek-result")).toContainText(
+    "<script>window.COMPROMISED=true</script>",
+  );
+  await expect(writing).toHaveText("600000001");
+  expect(
+    (await page.locator(".peek-result").innerText()).match(/Nombre:/g),
+  ).toHaveLength(1);
+  expect(await page.evaluate(() => "COMPROMISED" in window)).toBe(false);
+  expect(await page.locator(".peek-result script").count()).toBe(0);
+  await page.mouse.up();
+  await expect(page.locator(".peek-result")).toHaveCount(0);
+  await page.unroute("**/api/query");
+  await page.getByRole("button", { name: "Deshacer", exact: true }).click();
+  await expect(writing).toHaveText("600000001");
+  await page.getByRole("button", { name: "Opciones de nota" }).click();
+  await page
+    .getByRole("button", { name: "Área del artista", exact: true })
+    .click();
+  await expect(page.locator(".diagnostics")).toContainText(
+    "Resultado retirado",
+  );
+  await page
+    .getByRole("button", { name: "Borrar sesión y resultados" })
+    .click();
+  await page.getByRole("button", { name: "Volver a Notas" }).click();
+  await expect(page.getByText("8 notas", { exact: true })).toBeVisible();
+  const cached = await page.evaluate(async () => {
+    const urls: string[] = [];
+    for (const name of await caches.keys()) {
+      if (name.startsWith("notas-public-"))
+        for (const req of await (await caches.open(name)).keys())
+          urls.push(new URL(req.url).pathname);
+    }
+    return urls;
+  });
+  expect(cached.length).toBeGreaterThan(0);
+  expect(
+    cached.every(
+      (path) =>
+        path.startsWith("/icons/") ||
+        ["/offline.html", "/offline.css", "/manifest.json"].includes(path),
+    ),
+  ).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+===== FIN: tests/browser/flow.spec.ts =====
+
+
+===== ARCHIVO: tests/browser/telegram-config.spec.ts =====
+import { test, expect } from "playwright/test";
+// These UI cases deliberately mock configuration. PWA caching is exercised by flow.spec.ts.
+test.use({ serviceWorkers: "block" });
+test("área del artista: comprobación Telegram no consulta números y configuración incompleta queda bloqueada", async ({
+  page,
+}) => {
+  let configured = true,
+    checks = 0,
+    queries = 0;
+  await page.route("**/api/config", (route) =>
+    route.fulfill({
+      json: {
+        mode: "real",
+        transport: "telegram",
+        artist: "Artista ficticio",
+        artistId: "fictional-artist",
+        participants: [],
+        realConfigured: configured,
+      },
+    }),
+  );
+  await page.route("**/api/provider-check", (route) => {
+    checks++;
+    return route.fulfill({
+      json: {
+        transport: "telegram",
+        authenticated: true,
+        targetVerified: true,
+        webhookAbsent: true,
+        communication: "not_verified",
+      },
+    });
+  });
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/query")) queries++;
+  });
+  const loaded = page.waitForResponse((response) =>
+    response.url().endsWith("/api/config"),
+  );
+  await page.goto("/signin-with-chatgpt?return_to=/");
+  await loaded;
+  await expect(page.getByText("8 notas", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Menú y área del artista" }).click();
+  await expect(
+    page.getByText("Telegram · bot propio", { exact: true }),
+  ).toBeVisible();
+  const check = page.getByRole("button", {
+    name: "Comprobar conexión del bot",
+  });
+  await check.click();
+  await expect(page.getByRole("status")).toContainText("todavía pendientes");
+  expect(checks).toBe(1);
+  expect(queries).toBe(0);
+  await expect(
+    page.getByRole("button", { name: "Preparar sesión", exact: true }),
+  ).toBeDisabled();
+  // Actual local server stays in demo and rejects a Telegram check instead of contacting any provider.
+  expect((await page.request.get("/api/provider-check")).status()).toBe(409);
+  configured = false;
+  const reloaded = page.waitForResponse((response) =>
+    response.url().endsWith("/api/config"),
+  );
+  await page.reload();
+  await reloaded;
+  await expect(page.getByText("8 notas", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Menú y área del artista" }).click();
+  await expect(check).toBeDisabled();
+  expect(queries).toBe(0);
+});
+
+===== FIN: tests/browser/telegram-config.spec.ts =====
+
+
+===== ARCHIVO: tests/domain.test.ts =====
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  normalizePhone,
+  validateResult,
+  formatResult,
+  canInsert,
+} from "../lib/domain.ts";
+for (const input of [
+  "600000001",
+  "600 000-001",
+  "+34 600 000 001",
+  "0034-600-000-001",
+]) {
+  test(`normaliza ${input}`, () =>
+    assert.equal(normalizePhone(input), "+34600000001"));
+}
+for (const input of [
+  "60000000",
+  "800000001",
+  "+34+34600000001",
+  "600000001 700000002",
+  "600.000.001",
+  "600000001 ext 1",
+  "600000001\n600000001",
+  "1234567890",
+]) {
+  test(`rechaza entrada ambigua/inválida ${input}`, () =>
+    assert.throws(() => normalizePhone(input)));
+}
+test("acepta número en primera línea y preserva texto de la nota fuera de normalización", () => {
+  assert.equal(
+    normalizePhone("Ideas\n+34 600-000-001\nEscena"),
+    "+34600000001",
+  );
+});
+test("valida correlación y campos parciales, no inventa datos", () => {
+  assert.throws(() =>
+    validateResult(
+      { requestId: "b", phone: "+34600000001", final: true },
+      "a",
+      "+34600000001",
+    ),
+  );
+  assert.throws(() =>
+    validateResult(
+      { requestId: "a", phone: "+34600000001", final: false },
+      "a",
+      "+34600000001",
+    ),
+  );
+  const r = validateResult(
+    {
+      requestId: "a",
+      phone: "+34600000001",
+      final: true,
+      name: "<script>alert(1)</script>",
+    },
+    "a",
+    "+34600000001",
+  );
+  assert.equal(
+    formatResult(r),
+    "Número: +34600000001\nNombre: <script>alert(1)</script>",
+  );
+  assert.throws(() =>
+    validateResult(
+      {
+        requestId: "a",
+        phone: "+34600000001",
+        final: true,
+        name: { html: "x" },
+      },
+      "a",
+      "+34600000001",
+    ),
+  );
+});
+test("no inserta tras editar, cambiar nota o reiniciar sesión", () => {
+  const a = { sessionId: "s", noteId: "n", revision: 2, generation: 1 };
+  assert.equal(canInsert(a, a), true);
+  for (const b of [
+    { ...a, revision: 3 },
+    { ...a, noteId: "m" },
+    { ...a, sessionId: "t" },
+    { ...a, generation: 2 },
+  ])
+    assert.equal(canInsert(a, b), false);
+});
+
+===== FIN: tests/domain.test.ts =====
+
+
+===== ARCHIVO: tests/editor-history.test.ts =====
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { EditorHistory } from "../lib/client/editor-history.ts";
+test("historial conserva saltos, deshace un cambio y limita memoria", () => {
+  const h = new EditorHistory({ text: "Título\nTexto", start: 12, end: 12 });
+  h.record({ text: "Título\nTexto añadido", start: 20, end: 20 });
+  assert.equal(h.undo()?.text, "Título\nTexto");
+  assert.equal(h.redo()?.text, "Título\nTexto añadido");
+  for (let i = 0; i < 80; i++)
+    h.record({ text: "x".repeat(10000) + i, start: 0, end: 0 });
+  assert.ok(h.depth <= 50);
+  assert.ok(h.size <= 200000);
+});
+
+===== FIN: tests/editor-history.test.ts =====
+
+
+===== ARCHIVO: tests/notes.test.ts =====
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  groups,
+  findNotes,
+  persistNotes,
+  loadNotes,
+  type Note,
+} from "../lib/client/notes.ts";
+test("agrupación por fechas reales y búsqueda sin distinguir acentos", () => {
+  const now = Date.parse("2026-10-11T14:00:00Z");
+  const notes = [
+    {
+      id: "a",
+      text: "Café\nRecordatorio",
+      pinned: false,
+      updated: now - 86400000,
+    },
+    { id: "b", text: "Fijada", pinned: true, updated: now - 30 * 86400000 },
+  ];
+  assert.deepEqual(
+    groups(notes, now).map((g) => g[0]),
+    ["Fijadas", "Ayer"],
+  );
+  assert.equal(findNotes(notes, "cafe")[0].id, "a");
+});
+test("no persiste contenido de actuación ni resultados", () => {
+  let stored = "";
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      setItem(_k: string, v: string) {
+        stored = v;
+      },
+      getItem() {
+        return stored;
+      },
+    },
+  });
+  const notes: Note[] = [
+    { id: "ordinary", text: "Lista de la compra", updated: 1, pinned: false },
+    {
+      id: "performance",
+      text: "Número\nNombre: DATOS-PERSONALES",
+      updated: 2,
+      pinned: false,
+      volatile: true,
+    },
+  ];
+  persistNotes(notes);
+  assert.ok(!stored.includes("DATOS-PERSONALES"));
+  assert.equal(loadNotes().length, 1);
+});
+
+test("borrado recuperable conserva texto, fechas y fijación; actuación se descarta", async () => {
+  const { deleteNote, restoreNote } = await import("../lib/client/notes.ts");
+  const ordinary: Note = {
+    id: "ordinary",
+    text: "Ficción\nSegunda línea",
+    pinned: true,
+    updated: 100,
+  };
+  const performance: Note = { ...ordinary, id: "performance", volatile: true };
+  const deleted = deleteNote([ordinary, performance], "ordinary", 200);
+  assert.equal(deleted[0].deleted, 200);
+  assert.equal(groups(deleted, 200).flatMap((g) => g[1]).length, 1);
+  assert.deepEqual(restoreNote(deleted, "ordinary")[0], ordinary);
+  assert.equal(deleteNote([performance], "performance", 200).length, 0);
+});
+test("papelera persistente excluye actuación y caduca a los 30 días", () => {
+  let stored = "";
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      setItem(_k: string, v: string) {
+        stored = v;
+      },
+      getItem() {
+        return stored;
+      },
+    },
+  });
+  const now = Date.now();
+  persistNotes([
+    {
+      id: "recover",
+      text: "Recuperable ficticio",
+      updated: now,
+      deleted: now - 1000,
+      pinned: true,
+    },
+    {
+      id: "expired",
+      text: "Caducado ficticio",
+      updated: now,
+      deleted: now - 31 * 86400000,
+      pinned: false,
+    },
+    {
+      id: "secret",
+      text: "RESPUESTA-PRIVADA",
+      updated: now,
+      deleted: now,
+      volatile: true,
+      pinned: false,
+    },
+  ]);
+  assert.ok(!stored.includes("RESPUESTA-PRIVADA"));
+  const loaded = loadNotes();
+  assert.equal(loaded.length, 1);
+  assert.equal(loaded[0].id, "recover");
+  assert.equal(loaded[0].pinned, true);
+});
+
+test("agrupa por día de calendario aunque cambie el horario de verano", () => {
+  const now = Date.parse("2026-03-29T01:30:00Z");
+  const previousDay = Date.parse("2026-03-28T22:30:00Z");
+  const sameDay = Date.parse("2026-03-28T23:30:00Z");
+  const notes: Note[] = [
+    {
+      id: "yesterday",
+      text: "Ayer ficticio",
+      updated: previousDay,
+      pinned: false,
+    },
+    { id: "today", text: "Hoy ficticio", updated: sameDay, pinned: false },
+  ];
+  assert.deepEqual(
+    groups(notes, now).map((g) => [g[0], g[1][0].id]),
+    [
+      ["Hoy", "today"],
+      ["Ayer", "yesterday"],
+    ],
+  );
+});
+
+test("guardado combina notas distintas y rechaza conflicto de la misma nota", async () => {
+  const { mergeOrdinaryNotes, NoteConflict } =
+    await import("../lib/client/notes.ts");
+  const a: Note = { id: "a", text: "Ficción A", updated: 1, pinned: false };
+  const b: Note = { ...a, id: "b", text: "Ficción B" };
+  const editA = { ...a, text: "Nueva ficción A", updated: 2 };
+  const editB = { ...b, text: "Nueva ficción B", updated: 3 };
+  assert.deepEqual(mergeOrdinaryNotes([a, b], [a, editB], [editA, b]), [
+    editA,
+    editB,
+  ]);
+  assert.throws(
+    () =>
+      mergeOrdinaryNotes(
+        [a, b],
+        [{ ...a, text: "Otra ficción" }, b],
+        [editA, b],
+      ),
+    NoteConflict,
+  );
+  assert.deepEqual(mergeOrdinaryNotes([a, b], [b], [a, editB]), [editB]);
+});
+
+test("eliminar una copia temporal borra todas sus copias y permite recuperar el original exacto", async () => {
+  const { deleteNote, restoreNote } = await import("../lib/client/notes.ts");
+  const original: Note = {
+    id: "original",
+    text: "Texto ficticio original",
+    pinned: true,
+    updated: 123,
+  };
+  const copy: Note = {
+    ...original,
+    id: "copy",
+    sourceId: original.id,
+    text: "Edición privada temporal",
+    volatile: true,
+  };
+  const copy2: Note = { ...copy, id: "copy2" };
+  const other: Note = { ...original, id: "other", text: "Otra nota" };
+  const deleted = deleteNote([original, copy, copy2, other], copy.id, 456);
+  assert.equal(deleted.length, 2);
+  assert.deepEqual(deleted[0], { ...original, deleted: 456 });
+  assert.deepEqual(restoreNote(deleted, original.id), [original, other]);
+  assert.ok(!JSON.stringify(deleted).includes("Edición privada"));
+  assert.deepEqual(deleteNote([original, copy], original.id, 456), [
+    { ...original, deleted: 456 },
+  ]);
+});
+
+===== FIN: tests/notes.test.ts =====
+
+
+===== ARCHIVO: tests/providers.test.ts =====
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { HttpProvider, participants } from "../lib/server/providers.ts";
+const config = {
+  PROVIDER_MODE: "real",
+  PROVIDER_API_URL: "https://authorized.example/lookup",
+  PROVIDER_API_TOKEN: "test-only-secret",
+  PROVIDER_AUTHORIZED: "true",
+};
+const input = {
+  requestId: "r",
+  phone: "+34600000001",
+  sessionId: "s",
+  signal: new AbortController().signal,
+};
+test("adaptador real exige HTTPS, token y permiso sin fallback a demo", () => {
+  for (const c of [
+    { ...config, PROVIDER_API_TOKEN: "" },
+    { ...config, PROVIDER_AUTHORIZED: "false" },
+    { ...config, PROVIDER_API_URL: "http://insecure.example" },
+  ])
+    assert.throws(() => new HttpProvider(c));
+});
+test("solo autorizaciones vigentes del titular y para el artista/proveedor correctos", () => {
+  const grant = {
+    id: "participant-a",
+    label: "Registro autorizado",
+    phone: "+34600000001",
+    artistId: "artist",
+    consentRef: "verified-reference",
+    ownershipVerifiedAt: "2026-01-01",
+    expiresAt: "2099-01-01",
+    scope: "lookup",
+    provider: config.PROVIDER_API_URL,
+  };
+  for (const patch of [
+    { artistId: "other" },
+    { expiresAt: "2020-01-01" },
+    { ownershipVerifiedAt: undefined },
+    { consentRef: "" },
+    { provider: "https://other.example" },
+    { scope: "unrelated" },
+  ])
+    assert.equal(
+      participants(
+        {
+          ...config,
+          AUTHORIZED_PARTICIPANTS_JSON: JSON.stringify([
+            { ...grant, ...patch },
+          ]),
+        },
+        "artist",
+      ).length,
+      0,
+    );
+  assert.equal(
+    participants(
+      { ...config, AUTHORIZED_PARTICIPANTS_JSON: JSON.stringify([grant]) },
+      "artist",
+    ).length,
+    1,
+  );
+});
+test("API correlaciona, rechaza parcial/malicioso estructural, limita respuesta y no reintenta", async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  let response: unknown = {
+    requestId: "r",
+    phone: input.phone,
+    final: true,
+    name: "<img src=x onerror=alert(1)>",
+  };
+  globalThis.fetch = async (_url, options) => {
+    calls++;
+    assert.equal(
+      (options?.headers as Record<string, string>)["Idempotency-Key"],
+      "r",
+    );
+    return Response.json(response);
+  };
+  try {
+    const provider = new HttpProvider(config);
+    assert.equal(
+      (await provider.lookup(input)).name,
+      "<img src=x onerror=alert(1)>",
+    );
+    response = {
+      requestId: "other",
+      phone: input.phone,
+      final: true,
+      name: "x",
+    };
+    await assert.rejects(provider.lookup(input), /no corresponde/);
+    response = { requestId: "r", phone: input.phone, final: false };
+    await assert.rejects(provider.lookup(input), /parcial/);
+    response = {
+      requestId: "r",
+      phone: input.phone,
+      final: true,
+      name: "x".repeat(10000),
+    };
+    await assert.rejects(provider.lookup(input), /excesiva/);
+    assert.equal(calls, 4);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("429 del proveedor no reintenta", async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response("", { status: 429 });
+  };
+  try {
+    await assert.rejects(
+      new HttpProvider(config).lookup(input),
+      /limita las consultas/,
+    );
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("fallo HTTPS expone solo categoría fija y no reintenta ni filtra datos", async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    throw new Error(
+      "DNS lookup failed: test-only-secret +34600000001 private name",
+    );
+  };
+  try {
+    await assert.rejects(
+      new HttpProvider(config).lookup(input),
+      (error: unknown) => {
+        const safe = JSON.stringify(error);
+        assert.ok(safe.includes("PROVIDER_NETWORK_DNS"));
+        for (const privateValue of [
+          "test-only-secret",
+          "+34600000001",
+          "private name",
+        ])
+          assert.equal(safe.includes(privateValue), false);
+        return true;
+      },
+    );
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("redirección del proveedor no sigue destino ni revela consulta de Location", async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (_url, options) => {
+    calls++;
+    assert.equal(options?.redirect, "manual");
+    return new Response(null, {
+      status: 307,
+      headers: { Location: "https://other.example/login?token=private-token" },
+    });
+  };
+  try {
+    await assert.rejects(
+      new HttpProvider(config).lookup(input),
+      (error: unknown) => {
+        assert.ok(
+          error instanceof Error && error.message.includes("other.example"),
+        );
+        assert.equal(JSON.stringify(error).includes("private-token"), false);
+        return true;
+      },
+    );
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+===== FIN: tests/providers.test.ts =====
+
+
+===== ARCHIVO: tests/service.test.ts =====
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
+import { readFileSync } from "node:fs";
+import { Service } from "../lib/server/service.ts";
+impor

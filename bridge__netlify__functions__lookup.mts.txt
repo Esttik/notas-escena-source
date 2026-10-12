@@ -1,0 +1,53 @@
+ARCHIVO ORIGINAL: bridge/netlify/functions/lookup.mts
+
+import type { Config } from "@netlify/functions";
+import { getDatabase } from "@netlify/database";
+import { CloudLedger, type SqlPool } from "../../src/cloud-ledger.ts";
+import { BridgeEngine } from "../../src/engine.ts";
+import { makeClient, UserTransport } from "../../src/telegram-client.ts";
+import { unseal } from "../../src/vault.ts";
+import { createCloudHandler } from "../../src/cloud-http.ts";
+const env = (name: string) => process.env[name] ?? "";
+const decoded = (name: string) =>
+  Buffer.from(env(name), "base64").toString("utf8");
+class CloudTransport extends UserTransport {
+  async verify(signal: AbortSignal) {
+    const stop = () => {
+      void this.client.disconnect();
+    };
+    signal.addEventListener("abort", stop, { once: true });
+    try {
+      await this.client.connect();
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      return await super.verify(signal);
+    } finally {
+      signal.removeEventListener("abort", stop);
+    }
+  }
+  async close() {
+    await this.client.disconnect();
+  }
+}
+export default createCloudHandler(
+  async (input, signal) => {
+    const database = getDatabase();
+    const ledger = new CloudLedger(database.pool as SqlPool, env("BRIDGE_BEARER_TOKEN"));
+    const client = makeClient(
+      unseal(
+        decoded("TELEGRAM_SESSION_ENCRYPTED_BASE64"),
+        env("BRIDGE_ENCRYPTION_KEY"),
+      ),
+    );
+    const engine = new BridgeEngine(new CloudTransport(client), ledger, {
+      finalSuffix: decoded("TELEGRAM_FINAL_SUFFIX_BASE64"),
+      noResultText: env("TELEGRAM_NO_RESULT_TEXT") || undefined,
+    });
+    try { return await engine.lookup(input, signal); }
+    finally { await database.pool.end(); }
+  },
+  () => ({
+    secret: env("BRIDGE_BEARER_TOKEN"),
+    holder: JSON.parse(decoded("BRIDGE_HOLDER_BASE64") || "null"),
+  }),
+);
+export const config: Config = { path: "/lookup" };

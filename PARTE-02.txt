@@ -1,0 +1,976 @@
+ative;
+}
+.list-screen {
+  min-height: 100dvh;
+  background: linear-gradient(180deg, #eeeef4, var(--canvas) 170px);
+  padding-bottom: 110px;
+}
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: env(safe-area-inset-top) 20px 0;
+  min-height: 92px;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: linear-gradient(#eeeef5 70%, #eeeef500);
+}
+.round {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 9px 23px #00000006;
+  border: 1px solid #ffffffbd;
+}
+.round svg {
+  width: 26px;
+  height: 26px;
+}
+.list-heading {
+  text-align: center;
+  align-self: center;
+  padding-top: 1px;
+}
+.list-heading h1 {
+  font-size: 0.9375rem;
+  line-height: 19px;
+  font-weight: 650;
+  letter-spacing: -0.2px;
+  margin: 0;
+}
+.list-heading p {
+  font-size: 0.875rem;
+  color: var(--muted);
+  margin: 1px 0 0;
+  line-height: 18px;
+}
+.note-groups {
+  padding: 4px 20px 0;
+}
+.note-section {
+  margin: 22px 0 26px;
+}
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 31px;
+  margin-bottom: 9px;
+}
+.section-heading h2 {
+  margin: 0;
+  font-size: 1.3125rem;
+  line-height: 27px;
+  letter-spacing: -0.6px;
+  font-weight: 720;
+}
+.collapse {
+  color: var(--accent);
+  width: 44px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+}
+.collapse svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2.8;
+}
+.collapse.folded svg {
+  transform: rotate(-90deg);
+}
+.note-card {
+  background: white;
+  border-radius: 26px;
+  overflow: hidden;
+}
+.note-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  text-align: left;
+  width: calc(100% - 56px);
+  margin-left: 28px;
+  min-height: 57px;
+  padding: 9px 0 9px;
+  position: relative;
+}
+.note-row + .note-row {
+  border-top: 1px solid var(--line);
+}
+.row-title {
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+  line-height: 21px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row-excerpt {
+  font-size: 0.9375rem;
+  line-height: 20px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.15px;
+}
+.row-excerpt time {
+  margin-right: 4px;
+}
+.list-bottom {
+  position: fixed;
+  bottom: var(--keyboard-inset);
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 11px;
+  align-items: center;
+  padding: 22px 26px max(25px, env(safe-area-inset-bottom));
+  background: linear-gradient(#f2f2f700, #f2f2f7b3 45%, #f2f2f7d9);
+  z-index: 5;
+  pointer-events: none;
+}
+.list-bottom > * {
+  pointer-events: auto;
+}
+.search-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #ffffffda;
+  border-radius: 40px;
+  height: 46px;
+  padding: 0 16px;
+  flex: 1;
+  border: 1px solid white;
+  box-shadow: 0 6px 22px #00000004;
+  backdrop-filter: blur(15px);
+}
+.search-pill input {
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-size: 1.0625rem;
+  width: 100%;
+  color: var(--ink);
+}
+.search-pill input::-webkit-search-cancel-button {
+  display: none;
+}
+.search-pill input::placeholder {
+  color: #777;
+}
+.search-pill button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+}
+.compose {
+  width: 46px;
+  height: 46px;
+}
+.compose svg {
+  width: 26px;
+  height: 26px;
+}
+.empty {
+  padding: 60px 18px;
+  color: var(--muted);
+  text-align: center;
+}
+.editor-screen {
+  min-height: 100dvh;
+  background: var(--paper);
+  padding-bottom: calc(90px + var(--keyboard-inset));
+}
+.editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: env(safe-area-inset-top) 20px 8px;
+  min-height: 86px;
+  position: sticky;
+  top: 0;
+  z-index: 7;
+  background: linear-gradient(#fff 60%, #ffffffcc);
+}
+.editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.editor-header .round {
+  box-shadow: 0 9px 25px #00000005;
+  background: #fff;
+}
+.action-pill {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  background: white;
+  border-radius: 40px;
+  box-shadow: 0 9px 25px #00000005;
+  padding: 0 4px;
+}
+.action-pill button {
+  height: 44px;
+  width: 44px;
+  display: grid;
+  place-items: center;
+}
+.action-pill svg {
+  width: 25px;
+  height: 25px;
+}
+.editor-header .done {
+  background: var(--accent);
+  border-color: #f0c916;
+  color: #fff0a0;
+}
+.done svg {
+  width: 27px;
+  height: 27px;
+  stroke-width: 2.4;
+}
+.writing-area {
+  font-size: 1.0625rem;
+  line-height: 1.55;
+  font-weight: 400;
+  min-height: calc(100dvh - 186px - var(--keyboard-inset));
+  padding: 10px 26px 45px;
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  caret-color: var(--accent);
+  color: #454545;
+  tab-size: 4;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.writing-stack {
+  position: relative;
+}
+.peek-result {
+  position: absolute;
+  left: 26px;
+  right: 26px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 1.0625rem;
+  line-height: 1.55;
+  color: #454545;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.link-tool {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+.writing-area::first-line {
+  font-size: 1.6875rem;
+  font-weight: 730;
+  line-height: 1.35;
+  letter-spacing: -0.4px;
+}
+.writing-area:empty::before {
+  content: " ";
+  font-size: 1.6875rem;
+}
+.writing-area::selection {
+  background: #ffec9d;
+}
+.keyboard-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: 1px;
+  position: fixed;
+  bottom: calc(var(--keyboard-inset) + env(safe-area-inset-bottom) + 12px);
+  left: 12px;
+  right: 12px;
+  border-radius: 36px;
+  height: 46px;
+  background: #ffffffec;
+  box-shadow: 0 7px 33px #00000009;
+  z-index: 8;
+  backdrop-filter: blur(15px);
+  padding: 0 6px;
+}
+.keyboard-open .keyboard-toolbar {
+  bottom: calc(var(--keyboard-inset) + 12px);
+}
+.tool {
+  height: 44px;
+  min-width: 44px;
+  width: 16.5%;
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+.tool svg {
+  width: 25px;
+  height: 25px;
+}
+.text-tool {
+  font-size: 1.4375rem;
+  letter-spacing: -0.6px;
+}
+.link-tool svg {
+  width: 26px;
+}
+.state-mark {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  right: 8px;
+  top: 7px;
+  background: transparent;
+}
+.pending .state-mark {
+  background: var(--accent);
+  animation: pulse 1s ease-in-out infinite;
+}
+.complete .state-mark {
+  background: #997300;
+}
+.failed .state-mark {
+  background: #8e5050;
+}
+.pending svg {
+  opacity: 0.55;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.2;
+  }
+}
+.note-menu,
+.format-menu {
+  position: fixed;
+  z-index: 12;
+  background: #fffffff5;
+  border: 1px solid #ededed;
+  box-shadow: 0 10px 45px #0002;
+  border-radius: 18px;
+  padding: 6px;
+  backdrop-filter: blur(15px);
+  width: 225px;
+}
+.note-menu {
+  right: 22px;
+  top: calc(env(safe-area-inset-top) + 75px);
+}
+.note-menu button,
+.format-menu button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 46px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 0.9375rem;
+}
+.note-menu button + button {
+  border-top: 1px solid #eee;
+}
+.format-menu {
+  left: 18px;
+  bottom: calc(var(--keyboard-inset) + env(safe-area-inset-bottom) + 70px);
+}
+.format-menu p {
+  padding: 6px 12px;
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.editor-hint {
+  position: fixed;
+  bottom: calc(var(--keyboard-inset) + 80px);
+  left: 20px;
+  right: 20px;
+  z-index: 10;
+  border: 1px solid #eee;
+  background: #fff;
+  padding: 12px;
+  border-radius: 15px;
+  font-size: 0.875rem;
+}
+.editor-hint p {
+  margin: 0 0 8px;
+}
+.editor-hint button {
+  color: #806200;
+  min-height: 34px;
+}
+.keyboard-open .writing-area {
+  padding-bottom: 75px;
+}
+.plain-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: calc(env(safe-area-inset-top) + 20px) 20px 15px;
+}
+.plain-header h1 {
+  font-size: 1.5rem;
+  letter-spacing: -0.6px;
+  margin: 0;
+}
+.artist-screen {
+  padding-bottom: env(safe-area-inset-bottom);
+  min-height: 100dvh;
+}
+.artist-content {
+  padding: 15px 24px 40px;
+  max-width: 640px;
+  margin: auto;
+}
+.artist-content h2 {
+  font-size: 1.375rem;
+  letter-spacing: -0.5px;
+  margin: 20px 0 8px;
+}
+.artist-content p {
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  margin: 8px 0;
+  color: #55555c;
+}
+.artist-content p.small,
+.small {
+  font-size: 0.8125rem;
+  color: #69696e;
+}
+.mode-label {
+  display: inline-block;
+  border: 1px solid #ddcf95;
+  background: #fff7d8;
+  color: #68521c;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.artist-content p.notice {
+  background: #fff;
+  border-radius: 14px;
+  padding: 14px;
+  margin: 18px 0;
+  font-size: 0.875rem;
+}
+fieldset {
+  padding: 0;
+  border: 0;
+  margin: 22px 0;
+}
+legend {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.participant {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: white;
+  padding: 14px;
+  border-radius: 12px;
+  margin: 5px 0;
+  font-size: 0.875rem;
+}
+.participant input {
+  accent-color: #957500;
+  width: 20px;
+  height: 20px;
+}
+.participant strong {
+  display: block;
+  font-size: 1.0625rem;
+  margin-top: 4px;
+  font-weight: 600;
+}
+.primary {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  border-radius: 14px;
+  background: #e8b900;
+  color: #302500;
+  font-weight: 650;
+  font-size: 0.9375rem;
+  padding: 12px 18px;
+  margin: 12px 0;
+}
+.primary.light {
+  background: white;
+  border: 1px solid #e7e7eb;
+}
+.danger {
+  color: #ad3030;
+}
+.artist-content > .danger {
+  min-height: 44px;
+  padding: 8px 0;
+  text-align: left;
+}
+.session-info,
+.diagnostics,
+.help {
+  margin: 22px 0;
+  padding-top: 5px;
+  border-top: 1px solid #dddde4;
+}
+.request-id {
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
+}
+.error {
+  color: #a12b2b !important;
+}
+.signout {
+  display: inline-block;
+  margin-top: 14px;
+  font-size: 0.875rem;
+  min-height: 44px;
+  padding: 12px 0;
+}
+.app-notice {
+  position: fixed;
+  z-index: 30;
+  bottom: 100px;
+  left: 20px;
+  right: 20px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 14px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.875rem;
+  box-shadow: 0 6px 30px #0001;
+}
+.app-notice button {
+  min-width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+}
+.folders {
+  padding: 0 20px;
+  min-height: 100dvh;
+}
+.folders .plain-header {
+  justify-content: space-between;
+  padding-left: 0;
+  padding-right: 0;
+}
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: white;
+  border-radius: 16px;
+  width: 100%;
+  min-height: 56px;
+  padding: 14px;
+  font-size: 1.0625rem;
+  margin: 20px 0;
+}
+.folder-row svg:first-child {
+  color: #987600;
+}
+.folder-row span:nth-child(2) {
+  flex: 1;
+  text-align: left;
+}
+.folder-row span:nth-child(3) {
+  color: #777;
+}
+.folder-row svg:last-child {
+  width: 16px;
+  transform: rotate(-90deg);
+  color: #888;
+}
+.folders p {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: #666;
+  padding: 8px;
+}
+.folders .primary {
+  margin-top: 35px;
+}
+@media (min-width: 600px) {
+  body {
+    background: #e5e5eb;
+  }
+  .app-shell {
+    max-width: 760px;
+    box-shadow: 0 0 70px #0000000c;
+  }
+  .list-header,
+  .editor-header {
+    padding-left: 28px;
+    padding-right: 28px;
+  }
+  .note-groups {
+    padding: 0 28px;
+  }
+  .note-row {
+    min-height: 66px;
+  }
+  .list-bottom,
+  .keyboard-toolbar {
+    max-width: 708px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .writing-area {
+    padding-left: 36px;
+    padding-right: 36px;
+  }
+  .peek-result {
+    left: 36px;
+    right: 36px;
+  }
+  .note-menu {
+    right: max(22px, calc((100vw - 700px) / 2));
+  }
+  .format-menu {
+    left: max(18px, calc((100vw - 700px) / 2));
+  }
+  .app-notice {
+    max-width: 680px;
+    margin: auto;
+  }
+  .section-heading h2 {
+    font-size: 1.5rem;
+  }
+  .list-heading h1 {
+    font-size: 1.0625rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.row-title {
+  line-height: 1.24;
+}
+.row-excerpt {
+  line-height: 1.33;
+}
+.section-heading h2 {
+  line-height: 1.3;
+}
+.list-heading h1,
+.list-heading p {
+  line-height: 1.25;
+}
+
+.collapse {
+  position: relative;
+}
+.collapse::after {
+  content: "";
+  position: absolute;
+  inset: -7px 0;
+}
+.search-pill input::placeholder {
+  color: #737378;
+}
+
+.swipe-row {
+  position: relative;
+  overflow: hidden;
+  background: white;
+}
+.swipe-row + .swipe-row .note-row {
+  border-top: 1px solid var(--line);
+}
+.swipe-row .note-row {
+  touch-action: pan-y;
+  background: white;
+}
+.swipe-row.show-delete .note-row {
+  transform: translateX(-88px);
+}
+.swipe-row.show-pin .note-row {
+  transform: translateX(88px);
+}
+.swipe-action {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 88px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  justify-content: center;
+  align-items: center;
+  background: #bd3030;
+  color: white;
+  font-size: 0.75rem;
+}
+.show-pin .swipe-action {
+  left: 0;
+  right: auto;
+  background: #967600;
+}
+.trash-card {
+  background: white;
+  border-radius: 20px;
+  padding: 16px 20px;
+  margin: 12px 0;
+}
+.trash-card h2 {
+  font-size: 1.0625rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.trash-actions {
+  display: flex;
+  gap: 24px;
+}
+.trash-actions button {
+  min-height: 44px;
+  color: #806200;
+}
+.trash-actions .danger {
+  color: #ad3030;
+}
+.keyboard-navigation .search-pill:focus-within {
+  outline: 2px solid #967600;
+  outline-offset: 2px;
+}
+.folders .plain-header h1 {
+  overflow-wrap: anywhere;
+}
+
+.writing-area:focus-visible {
+  outline: none;
+}
+.keyboard-navigation .writing-area:focus-visible {
+  outline: 2px solid #967600;
+  outline-offset: -4px;
+}
+
+===== FIN: app/globals.css =====
+
+
+===== ARCHIVO: app/layout.tsx =====
+import type { Metadata, Viewport } from "next";
+import "./globals.css";
+export const metadata: Metadata = {
+  title: "Notas",
+  description: "Notas y sesiones de actuación autorizadas.",
+  manifest: "/manifest.json",
+  appleWebApp: { capable: true, title: "Notas", statusBarStyle: "default" },
+  icons: { icon: "/icons/icon-192.png", apple: "/icons/apple-touch-icon.png" },
+};
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#f2f2f7",
+};
+export default function Layout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="es">
+      <body>{children}</body>
+    </html>
+  );
+}
+
+===== FIN: app/layout.tsx =====
+
+
+===== ARCHIVO: app/page.tsx =====
+import { requireChatGPTUser } from "./chatgpt-auth";
+import { NotesApp } from "../components/NotesApp";
+export const dynamic = "force-dynamic";
+export default async function Home() {
+  await requireChatGPTUser("/");
+  return <NotesApp />;
+}
+
+===== FIN: app/page.tsx =====
+
+
+===== ARCHIVO: bridge/.env.example =====
+# Server only. Real values go in ignored bridge/.env or host secret manager.
+TELEGRAM_API_ID=
+TELEGRAM_API_HASH=
+BRIDGE_ENCRYPTION_KEY=
+BRIDGE_BEARER_TOKEN=
+BRIDGE_STATE_DIR=.bridge-state
+BRIDGE_HOST=127.0.0.1
+PORT=8788
+# Exact final line, after observing a complete response for your OWN phone.
+# Empty deliberately blocks startup; never invent a marker.
+TELEGRAM_FINAL_SUFFIX=
+TELEGRAM_NO_RESULT_TEXT=
+
+===== FIN: bridge/.env.example =====
+
+
+===== ARCHIVO: bridge/Dockerfile =====
+FROM node:24-bookworm-slim
+WORKDIR /app/bridge
+COPY bridge/package.json bridge/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+COPY bridge/src ./src
+COPY lib /app/lib
+ENV NODE_ENV=production BRIDGE_HOST=0.0.0.0 BRIDGE_STATE_DIR=/data PORT=8788
+USER node
+EXPOSE 8788
+CMD ["npm", "start"]
+
+===== FIN: bridge/Dockerfile =====
+
+
+===== ARCHIVO: bridge/NETLIFY.md =====
+# Conexión alojada en Netlify
+
+Decisión: conservar la web privada actual y alojar su proveedor HTTP en un proyecto Netlify separado. No depende de un Mac, túnel ni Telegram abierto en el móvil. El navegador llama al backend autenticado de la web; este llama a la función protegida por un secreto de servidor.
+
+La función abre la sesión nueva de Telegram que el titular vinculó voluntariamente, consulta únicamente su propio móvil con autorización vigente y cierra la conexión. Un registro transaccional Postgres compartido reserva la cuenta **antes** de conectar Telegram. No hay funciones de fondo, reintentos de envío ni caché de respuestas. La tabla conserva únicamente UUID, HMAC, estado y tiempo durante 24 horas.
+
+La sesión se traslada cifrada a variables de entorno de Functions; no se publica ningún archivo de estado ni credencial. La conexión local debe detenerse antes de la primera consulta desde la nube para evitar usar simultáneamente la misma sesión desde direcciones distintas.
+
+La disponibilidad de una función no demuestra el recorrido real: hay que verificar autenticación, rechazo de otro número, correlación, respuesta y peek, y después repetir con el puente local apagado. Safari/WebKit emulado no sustituye una prueba en iPhone físico.
+
+## Configuración
+
+Desde esta carpeta, instalar con `npm ci`. Migraciones bajo `netlify/database/migrations/` se aplican mediante el despliegue; no aplicar DDL manualmente a producción. `netlify.toml` publica exclusivamente `public/` y las funciones de `netlify/functions/`.
+
+`netlify.env.example` enumera variables vacías sin secretos. No importar este ejemplo directamente sobre un servidor activo: sus valores vacíos reemplazarían la configuración. Los archivos reales deben permanecer fuera de Git.
+
+Variables privadas, exclusivamente scope Functions y contexto production: `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `BRIDGE_ENCRYPTION_KEY`, `BRIDGE_BEARER_TOKEN`, `TELEGRAM_SESSION_ENCRYPTED_BASE64` (session.enc codificado en base64), `BRIDGE_HOLDER_BASE64` (JSON de autorización en base64), `TELEGRAM_FINAL_SUFFIX_BASE64` y opcional `TELEGRAM_NO_RESULT_TEXT`. La base se aprovisiona mediante @netlify/database. `AWS_LAMBDA_JS_RUNTIME=nodejs24.x` se configura en Netlify, no en TOML.
+
+Usar siempre `--site <ID-del-proyecto-Notas>` al operar la CLI: el directorio superior contiene otro proyecto. `.netlify/` queda excluido de Git. El perímetro HTTP necesita permitir peticiones servidor a servidor; el endpoint exige bearer, rechaza Origin y valida cada dato. La web del artista mantiene su autenticación independiente.
+
+El consentimiento caduca siete días después de la vinculación. Renovarlo requiere una acción del titular; nunca se extiende automáticamente. Para revocar acceso: Telegram → Ajustes → Dispositivos → cerrar la sesión del servidor; borrar las variables de sesión y autorización en Netlify. El historial ya enviado puede permanecer en Telegram y en el proveedor.
+
+Las pruebas `npm test` necesitan PostgreSQL 17 (POSTGRES_BIN configurable) y ejecutan un clúster temporal sin modificar servicios existentes. Proyecto preparado: https://app.netlify.com/projects/YOUR_PROJECT. Activo en producción. Verificados health 200, ausencia de clave 401, otro móvil 403, consulta real del titular 200 y UUID duplicado 409 con los procesos locales apagados. Previews privadas.
+
+===== FIN: bridge/NETLIFY.md =====
+
+
+===== ARCHIVO: bridge/README.md =====
+# Telegram con tu cuenta — puente propio
+
+Implementa el enfoque de cliente de usuario que sugiere el registro de Numeria. No usa su servidor ni copia su sesión/código. Usa teleproto 1.230.0 (sucesor mantenido recomendado por el paquete GramJS archivado) y Node 24. La PWA llama a este puente desde su backend mediante el adaptador HTTP existente; Telegram nunca se contacta desde el navegador.
+
+## Vincular la cuenta
+
+1. En https://my.telegram.org entra con TU cuenta y abre API development tools. Necesitas tu propio API ID y API hash; el token del bot de BotFather no sirve. No pegues claves, códigos ni contraseñas en chats. Si ya tienes una aplicación, reutiliza sus credenciales.
+2. Con las credenciales ya configuradas en el `.env` privado del servidor, abre el asistente local:
+
+```sh
+cd /path/to/notas-escena/bridge
+npm ci --ignore-scripts
+npm run setup
+```
+
+Abre http://127.0.0.1:8790/ en ese mismo Mac. Introduce el móvil, escribe AUTORIZO y confirma la conexión. El código y la contraseña adicional se introducen únicamente en esta página local, sin enviarlos al sitio publicado. El asistente solo escucha en loopback, verifica Host, Origin y un token por proceso; no debe publicarse mediante un túnel. Una vinculación iniciada caduca a los tres minutos. Los códigos incorrectos pueden corregirse en el mismo intento (hasta tres errores); no se reenvía el código automáticamente. El formulario indica el método y longitud comunicados por Telegram y bloquea confirmaciones repetidas.
+
+Alternativa en Terminal, con entradas ocultas:
+
+```sh
+cd /path/to/notas-escena/bridge
+npm ci --ignore-scripts
+npm run login
+```
+
+3. Lee la delegación y autorízala en el programa. Introduce API ID/hash, teléfono, código y contraseña adicional solo en las entradas ocultas locales. Se crea una sesión nueva. Si Telegram pide crear una cuenta o resolver CAPTCHA, se detiene; no se crean cuentas ni se eluden restricciones.
+
+El programa guarda variables del servidor en `.env` (600), y la sesión AES-256-GCM en `.bridge-state/session.enc` (600) con directorio 700. El API hash y la clave de cifrado deben guardarse en un gestor de secretos del servidor de producción; copiar solo la sesión cifrada sin su clave no permite usarla. El registro `holder.json` acredita que la sesión corresponde al teléfono propio, con consentimiento explícito de siete días; renovar/revocar conforme al usuario. No se guarda el código ni la contraseña 2FA.
+
+Este cliente puede acceder técnicamente a la cuenta completa, como cualquier cliente MTProto; el programa limita sus operaciones al chat fijo y al teléfono propio. No equivale a permisos limitados de Bot API. Se puede revocar desde Telegram → Dispositivos. Cerrar Notas o borrar una actuación no revoca la sesión de Telegram.
+
+## Servidor
+
+Configura el marcador final EXACTO de una respuesta completa comprobada en `TELEGRAM_FINAL_SUFFIX`. Si no está, el arranque queda bloqueado. No se considera que una pausa indique finalización. Se exige reply al mensaje enviado y campo Number coincidente. Si el bot no mantiene ese protocolo, hay que adaptar y volver a probar el parser; no aceptar simplemente el último mensaje.
+
+```sh
+npm start
+```
+
+Arranca en 127.0.0.1:8788. GET /health devuelve solo disponibilidad del proceso; no demuestra que Telegram o el bot hayan aceptado una consulta. POST /lookup requiere Bearer secreto, Idempotency-Key UUID y {requestId,sessionId,phone}. No admite Origin ni credenciales por URL. Solo consulta el teléfono actual de la cuenta autenticada. Las altas de otros participantes requieren ampliar el registro del puente con la autorización verificable del titular.
+
+## Hosting Netlify
+
+El proveedor tiene una implementación moderna de Functions con registro compartido Postgres. Configuración y estado en [NETLIFY.md](NETLIFY.md). El proceso de sesión local solo es necesario para vincular o renovar; el uso alojado no necesita Telegram abierto en el teléfono. La conexión real desde Netlify se comprobó con el puente y el túnel del Mac apagados.
+
+## Conectar con Sites
+
+Se necesita un servidor Node con almacenamiento privado persistente y URL HTTPS alcanzable desde Sites. El Worker de Sites no ejecuta este proceso Node persistente. Este repositorio incluye Dockerfile (contexto desde la raíz del proyecto); se debe preparar /data con permisos para UID 1000 y montar un volumen persistente privado. No usar varias instancias independientes con distintos ledger; todas deben compartir la base/bloqueo. No dejar este puente en un puerto público sin HTTPS. Un Mac local necesita un túnel HTTPS autorizado y debe permanecer encendido; no es un hosting permanente.
+
+En las variables de servidor de Sites, después de probar el canal:
+
+```text
+PROVIDER_MODE=real
+PROVIDER_TRANSPORT=http
+PROVIDER_API_URL=https://tu-servidor/lookup
+PROVIDER_API_TOKEN=<BRIDGE_BEARER_TOKEN>
+PROVIDER_AUTHORIZED=true
+AUTHORIZED_PARTICIPANTS_JSON=<registro del titular>
+```
+
+El registro de Sites usa su artistId autenticado, los datos de holder.json, id/label propios y provider igual a la URL exacta. Todas las variables sensibles son secretas. El consentimiento y titularidad siguen siendo obligatorios antes de contactar al proveedor. La app ya detecta el móvil y reserva la respuesta hasta pulsar los eslabones.
+
+## Verificación y límites
+
+```sh
+npm test
+npm run typecheck
+```
+
+Los tests usan transportes ficticios y el servidor HTTP real de loopback; no abren una cuenta ni envían teléfonos a Telegram. Solicitudes RPC de consulta tienen maxRetryCount=0, timeout y AbortSignal. Identificador randomId estable por petición de envío, ledger SQLite durable para duplicados, una consulta pendiente por cuenta y 20/hora. Tras fallo/resultado desconocido hay espera de 60 s, sin reintentar. FLOOD_WAIT se respeta y los errores externos se convierten a códigos constantes. No se guardan resultados ni textos recibidos en SQLite; se purgan los UUID/hash/estado después de 24 h por actividad.
+
+Se ha registrado la aplicación propia en la página oficial de Telegram y guardado API ID/hash en el `.env` privado. El titular completó el login nuevo, se verificó su cuenta y el bot fijo, y se probó envío/recepción con su propio teléfono, reply y marcador final. El bot exigió unirse a @true_caller; lo realizó personalmente el titular. Se activó el adaptador HTTP del sitio privado a través de un túnel HTTPS temporal y se comprobó la inserción real en la nota. El proveedor ahora se ejecuta en Netlify Functions con Postgres compartido; el puente y el túnel del Mac se apagaron antes de comprobar una consulta real desde la nube. No necesitan permanecer encendidos. La disponibilidad de una sesión de usuario no demuestra permiso comercial del proveedor ni garantiza resultado, exactitud o retención; el cliente se detiene ante rechazo/limitación del servicio.
+
+===== FIN: bridge/README.md =====
+
+
+===== ARCHIVO: bridge/SPEC.md =====
+# Puente Telegram como usuario — 12/10/2026
+
+La petición posterior del usuario autoriza sustituir el requisito inicial de no automatizar una cuenta personal por un cliente de Telegram con sesión explícitamente autorizada. No se extrae la sesión de Telegram Web ni del móvil, no se reutilizan credenciales de Numeria y no se emplea su servidor. No se elimina ni debilita la autorización de los teléfonos.
+
+El Worker de Sites mantiene autenticación, sesión, consentimiento, límites, revisión y notas. El adaptador HTTP ya existente llama a este proceso Node independiente, que mantiene una conexión MTProto mediante teleproto 1.230.0, el sucesor mantenido recomendado por el paquete GramJS archivado. Solo el proceso Node conoce api_id, api_hash y sesión de Telegram. El alta se realiza localmente mediante el programa login, con entrada oculta de secretos; la sesión se cifra con AES-256-GCM y archivo privado. No se solicitan códigos ni contraseñas en la web de Notas.
+
+Inicialmente el puente admite solo el teléfono de la propia cuenta autenticada, cotejado en getMe. El usuario ha solicitado expresamente consultar su teléfono con @TrueCalleRobot; las altas de terceros siguen pendientes del registro de titularidad/consentimiento. La cuenta conectada es única por instancia. El destino es @TrueCalleRobot con ID estable 6108968969. No se leen otros chats ni se envían comandos de suscripción, se aceptan condiciones ni se eluden rechazos del bot.
+
+Contrato POST /lookup: Authorization Bearer secreto, Idempotency-Key UUID, JSON {requestId,phone,sessionId}; devuelve el QueryResult ya validado de la aplicación. JSON máximo 2 KB, sin CORS, sin resultados persistentes, error de código constante. GET /health no incluye identificadores ni teléfonos. Despliegue detrás de HTTPS; loopback por defecto. El servidor remoto precisa almacenamiento persistente privado y una sola instancia.
+
+Se envía una sola vez el teléfono canónico +34. teleproto no reintenta solicitudes de consulta ni espera automáticamente un FLOOD_WAIT. El login permite hasta tres intentos RPC para completar el cambio de centro de datos que exige Telegram; no aplica a las consultas, que fijan maxRetryCount=0. SQLite registra solo UUID/estado/fechas y hash del número para impedir duplicados incluso tras reiniciar; serialización y límites persistentes por cuenta. Se leen exclusivamente mensajes del chat configurado posteriores al envío, emitidos por el bot y en respuesta al ID enviado. Se exige Number coincidente y marcador final configurado. Parciales, duplicados y tardíos no se insertan ni provocan mensajes al bot. El marcador real debe comprobarse con la respuesta del teléfono propio; no se presume el protocolo por una captura.
+
+La aplicación propia ya se ha registrado, con autorización expresa del titular, en my.telegram.org. Sus credenciales están en el archivo privado del servidor, excluido de Git. Está disponible un asistente local en loopback para que el titular autorice una sesión nueva e introduzca personalmente sus códigos; no se reutiliza la sesión del navegador. El titular ha completado una sesión nueva; el bot, la cuenta y el protocolo se verificaron con su teléfono propio. El sitio usa el adaptador HTTP real mediante un túnel HTTPS temporal hacia el Mac, que debe permanecer activo. Las pruebas con dobles siguen identificadas como simulación. Falta hosting permanente y prueba física de iPhone/PWA. La sesión de usuario permite acceso de cuenta más amplio que un bot; el cliente confirma esta delegación al vincularla y puede revocarla en Telegram → Dispositivos.
+
+Fuentes: https://core.telegram.org/api/obtaining_api_id ; https://core.telegram.org/api/auth ; https://core.telegram.org/api/terms ; https://github.com/gram-js/gramjs .
+
+===== FIN: bridge/SPEC.md =====
+
+
+===== ARCHIVO: bridge/netlify/database/migrations/20261012013000_bridge_ledger.sql

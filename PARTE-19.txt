@@ -1,0 +1,1020 @@
+rror(
+      "CORRELATION",
+      "La respuesta no corresponde a esta petición.",
+      502,
+    );
+  if (v.final !== true)
+    throw new AppError(
+      "PARTIAL",
+      "El proveedor devolvió una respuesta parcial.",
+      502,
+    );
+  if (v.found !== undefined && typeof v.found !== "boolean")
+    throw new AppError("INVALID_RESULT", "Respuesta no válida.", 502);
+  const result: QueryResult = {
+    requestId,
+    phone,
+    final: true,
+    found: v.found !== false,
+  };
+  for (const key of ["country", "carrier", "name"] as const) {
+    if (v[key] === undefined) continue;
+    if (
+      typeof v[key] !== "string" ||
+      (v[key] as string).length > 200 ||
+      /[\u0000-\u001f\u007f]/.test(v[key] as string)
+    )
+      throw new AppError(
+        "INVALID_RESULT",
+        "Campo de respuesta no válido.",
+        502,
+      );
+    if ((v[key] as string).trim()) result[key] = v[key] as string;
+  }
+  if (result.found && !result.country && !result.carrier && !result.name)
+    throw new AppError(
+      "INVALID_RESULT",
+      "Respuesta vacía sin estado de resultado.",
+      502,
+    );
+  return result;
+}
+export function formatResult(r: QueryResult): string {
+  return [
+    `Número: ${r.phone}`,
+    r.country && `País: ${r.country}`,
+    r.carrier && `Operador: ${r.carrier}`,
+    r.name && `Nombre: ${r.name}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+export type Context = {
+  sessionId: string;
+  noteId: string;
+  revision: number;
+  generation: number;
+};
+export function canInsert(a: Context, b: Context): boolean {
+  return (
+    a.sessionId === b.sessionId &&
+    a.noteId === b.noteId &&
+    a.revision === b.revision &&
+    a.generation === b.generation
+  );
+}
+export async function digest(text: string): Promise<string> {
+  return [
+    ...new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
+    ),
+  ]
+    .map((v) => v.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+===== FIN: lib/domain.ts =====
+
+
+===== ARCHIVO: lib/server/providers.ts =====
+import { AppError, validateResult, type QueryResult } from "../domain.ts";
+import { TelegramProvider } from "./telegram.ts";
+import type { Store } from "./store.ts";
+export type ProviderInput = {
+  requestId: string;
+  phone: string;
+  sessionId: string;
+  signal: AbortSignal;
+};
+export interface Provider {
+  mode: "demo" | "real";
+  lookup(input: ProviderInput): Promise<QueryResult>;
+}
+export const DEMO_PARTICIPANTS = [
+  {
+    id: "demo-alba",
+    label: "Alba Ejemplo · ficha ficticia",
+    phone: "+34600000001",
+  },
+  {
+    id: "demo-leo",
+    label: "Leo Ensayo · ficha ficticia",
+    phone: "+34700000002",
+  },
+];
+export class DemoProvider implements Provider {
+  mode = "demo" as const;
+  async lookup({
+    requestId,
+    phone,
+    signal,
+  }: ProviderInput): Promise<QueryResult> {
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => {
+        clearTimeout(timer);
+        reject(new AppError("TIMEOUT", "Tiempo agotado.", 504));
+      };
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", abort);
+        resolve();
+      }, 600);
+      if (signal.aborted) abort();
+      else signal.addEventListener("abort", abort, { once: true });
+    });
+    const person = DEMO_PARTICIPANTS.find((p) => p.phone === phone);
+    return validateResult(
+      {
+        requestId,
+        phone,
+        final: true,
+        found: !!person,
+        ...(person
+          ? {
+              country: "España",
+              carrier: "Operador de demostración",
+              name:
+                phone === DEMO_PARTICIPANTS[0].phone
+                  ? "Alba Ejemplo"
+                  : "Leo Ensayo",
+            }
+          : {}),
+      },
+      requestId,
+      phone,
+    );
+  }
+}
+export type ProviderConfig = {
+  PROVIDER_MODE?: string;
+  PROVIDER_API_URL?: string;
+  PROVIDER_API_TOKEN?: string;
+  PROVIDER_AUTHORIZED?: string;
+  AUTHORIZED_PARTICIPANTS_JSON?: string;
+  PROVIDER_TRANSPORT?: string;
+  TELEGRAM_BOT_TOKEN?: string;
+  TELEGRAM_TARGET_BOT_ID?: string;
+  TELEGRAM_TARGET_USERNAME?: string;
+  TELEGRAM_PROTOCOL_CONFIRMED?: string;
+  TELEGRAM_FINAL_SUFFIX?: string;
+  TELEGRAM_NO_RESULT_TEXT?: string;
+};
+export class HttpProvider implements Provider {
+  mode = "real" as const;
+  config: ProviderConfig;
+  constructor(config: ProviderConfig) {
+    this.config = config;
+    let url: URL;
+    try {
+      url = new URL(config.PROVIDER_API_URL!);
+    } catch {
+      throw new AppError(
+        "PROVIDER_CONFIG",
+        "Falta URL de API autorizada.",
+        503,
+      );
+    }
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      !config.PROVIDER_API_TOKEN ||
+      config.PROVIDER_AUTHORIZED !== "true"
+    )
+      throw new AppError(
+        "PROVIDER_CONFIG",
+        "Faltan configuración o permisos del proveedor.",
+        503,
+      );
+  }
+  async lookup({
+    requestId,
+    phone,
+    sessionId,
+    signal,
+  }: ProviderInput): Promise<QueryResult> {
+    // Never retry: a failed delivery may have reached the external service already.
+    let res: Response;
+    try {
+      res = await fetch(this.config.PROVIDER_API_URL!, {
+        method: "POST",
+        redirect: "manual",
+        signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.PROVIDER_API_TOKEN}`,
+          "Idempotency-Key": requestId,
+        },
+        body: JSON.stringify({ requestId, phone, sessionId }),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      const reason = /redirect/i.test(message)
+        ? "REDIRECT"
+        : /dns|resolve|hostname/i.test(message)
+          ? "DNS"
+          : /certificate|tls|ssl/i.test(message)
+            ? "TLS"
+            : /different request|I\/O|context/i.test(message)
+              ? "CONTEXT"
+              : /header|character|invalid.*value/i.test(message)
+                ? "HEADER"
+                : /disallow|denied|forbidden|blocked/i.test(message)
+                  ? "BLOCKED"
+                  : /connection|socket|network/i.test(message)
+                    ? "CONNECTION"
+                    : /abort/i.test(message)
+                      ? "ABORTED"
+                      : "UNKNOWN";
+      throw new AppError(
+        `PROVIDER_NETWORK_${reason}`,
+        "No se pudo contactar con el puente HTTPS.",
+        502,
+      );
+    }
+    if (res.status >= 300 && res.status < 400) {
+      let hostname = "destino desconocido";
+      try {
+        const destination = new URL(
+          res.headers.get("location") ?? "",
+          this.config.PROVIDER_API_URL,
+        );
+        if (/^[a-z0-9.-]{1,150}$/i.test(destination.hostname))
+          hostname = destination.hostname;
+      } catch {
+        /* Never expose an untrusted Location or its query string. */
+      }
+      throw new AppError(
+        "PROVIDER_REDIRECT",
+        `El puente HTTPS redirige (${res.status}) a ${hostname}. No se reenviaron credenciales ni teléfono.`,
+        502,
+      );
+    }
+    if (res.status === 429)
+      throw new AppError(
+        "PROVIDER_RATE_LIMIT",
+        "El proveedor limita las consultas; espera antes de iniciar otra.",
+        429,
+      );
+    if (!res.ok)
+      throw new AppError(
+        "PROVIDER_ERROR",
+        "El proveedor no pudo completar la consulta.",
+        502,
+      );
+    if (!res.headers.get("content-type")?.includes("application/json"))
+      throw new AppError(
+        "INVALID_RESULT",
+        "El proveedor no devuelve JSON.",
+        502,
+      );
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let content = "";
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 8192) {
+        await reader.cancel();
+        throw new AppError("INVALID_RESULT", "Respuesta excesiva.", 502);
+      }
+      content += decoder.decode(value, { stream: true });
+    }
+    content += decoder.decode();
+    let value: unknown;
+    try {
+      value = JSON.parse(content);
+    } catch {
+      throw new AppError("INVALID_RESULT", "JSON no válido.", 502);
+    }
+    return validateResult(value, requestId, phone);
+  }
+}
+export function createProvider(
+  config: ProviderConfig,
+  store?: Store,
+): Provider {
+  if (!config.PROVIDER_MODE || config.PROVIDER_MODE === "demo")
+    return new DemoProvider();
+  if (config.PROVIDER_MODE === "real") {
+    if (config.PROVIDER_TRANSPORT === "telegram") {
+      if (!store)
+        throw new AppError(
+          "PROVIDER_CONFIG",
+          "Falta almacenamiento de correlación de Telegram.",
+          503,
+        );
+      return new TelegramProvider(config, store);
+    }
+    if (!config.PROVIDER_TRANSPORT || config.PROVIDER_TRANSPORT === "http")
+      return new HttpProvider(config);
+  }
+  throw new AppError("PROVIDER_CONFIG", "Modo de proveedor desconocido.", 503);
+}
+export type Grant = {
+  id: string;
+  label: string;
+  phone: string;
+  artistId: string;
+  consentRef: string;
+  ownershipVerifiedAt: string;
+  expiresAt: string;
+  scope: "lookup";
+  provider: string;
+};
+export function participants(config: ProviderConfig, userId: string) {
+  if (!config.PROVIDER_MODE || config.PROVIDER_MODE === "demo")
+    return DEMO_PARTICIPANTS;
+  let grants: unknown;
+  try {
+    grants = JSON.parse(config.AUTHORIZED_PARTICIPANTS_JSON ?? "[]");
+  } catch {
+    throw new AppError(
+      "GRANT_CONFIG",
+      "Registro de autorizaciones no válido.",
+      503,
+    );
+  }
+  if (!Array.isArray(grants) || grants.length > 100)
+    throw new AppError(
+      "GRANT_CONFIG",
+      "Registro de autorizaciones no válido.",
+      503,
+    );
+  return (grants as Grant[])
+    .filter(
+      (g) =>
+        g &&
+        g.artistId === userId &&
+        g.scope === "lookup" &&
+        typeof g.id === "string" &&
+        /^[a-z0-9-]{1,64}$/.test(g.id) &&
+        typeof g.label === "string" &&
+        g.label.length <= 100 &&
+        /^\+34[67]\d{8}$/.test(g.phone) &&
+        typeof g.consentRef === "string" &&
+        g.consentRef.length >= 8 &&
+        Number.isFinite(Date.parse(g.ownershipVerifiedAt)) &&
+        Date.parse(g.ownershipVerifiedAt) <= Date.now() &&
+        Date.parse(g.expiresAt) > Date.now() &&
+        g.provider === providerIdentity(config),
+    )
+    .map(({ id, label, phone }) => ({ id, label, phone }));
+}
+export function providerIdentity(config: ProviderConfig): string | undefined {
+  return config.PROVIDER_TRANSPORT === "telegram"
+    ? `telegram:@${config.TELEGRAM_TARGET_USERNAME}:${config.TELEGRAM_TARGET_BOT_ID}`
+    : config.PROVIDER_API_URL;
+}
+export function isProviderConfigured(
+  config: ProviderConfig,
+  store?: Store,
+): boolean {
+  if (config.PROVIDER_MODE !== "real") return false;
+  try {
+    createProvider(config, store);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+===== FIN: lib/server/providers.ts =====
+
+
+===== ARCHIVO: lib/server/service.ts =====
+import { AppError, digest, normalizePhone } from "../domain.ts";
+import {
+  createProvider,
+  participants,
+  type Provider,
+  type ProviderConfig,
+} from "./providers.ts";
+import { Store, type SessionRow, type QueryRow } from "./store.ts";
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const TIMEOUT = 12000;
+export class Service {
+  store: Store;
+  config: ProviderConfig;
+  provider: Provider;
+  timeout: number;
+  constructor(
+    store: Store,
+    config: ProviderConfig,
+    provider?: Provider,
+    timeout = TIMEOUT,
+  ) {
+    this.store = store;
+    this.config = config;
+    this.provider = provider ?? createProvider(config, store);
+    this.timeout = timeout;
+  }
+  async rate(userId: string, kind: string, max: number, period = 3600000) {
+    const now = Date.now(),
+      window = Math.floor(now / period),
+      key = `${kind}:${userId}:${window}`;
+    const row = await this.store.one<{ count: number }>(
+      "INSERT INTO limits (id,count,expires) VALUES (?,1,?) ON CONFLICT(id) DO UPDATE SET count=count+1 RETURNING count",
+      key,
+      (window + 1) * period,
+    );
+    if (!row || row.count > max)
+      throw new AppError(
+        "RATE_LIMIT",
+        "Límite alcanzado. Espera antes de continuar.",
+        429,
+      );
+  }
+  async cleanup() {
+    const now = Date.now();
+    await this.store.run(
+      "DELETE FROM queries WHERE created < ? OR session_id IN (SELECT id FROM sessions WHERE expires < ?)",
+      now - 7200000,
+      now,
+    );
+    await this.store.run("DELETE FROM sessions WHERE expires < ?", now);
+    await this.store.run("DELETE FROM limits WHERE expires < ?", now);
+  }
+  async start(userId: string, body: Record<string, unknown>) {
+    await this.rate(userId, "sessions", 5);
+    await this.cleanup();
+    const allowed = participants(this.config, userId);
+    if (
+      !Array.isArray(body.participantIds) ||
+      !body.participantIds.length ||
+      body.participantIds.length > 10 ||
+      body.participantIds.some(
+        (id) => typeof id !== "string" || !allowed.some((p) => p.id === id),
+      )
+    )
+      throw new AppError(
+        "UNAUTHORIZED_PARTICIPANT",
+        "Selecciona participantes autorizados para esta sesión.",
+        403,
+      );
+    await this.erase(userId);
+    const id = crypto.randomUUID(),
+      csrf = crypto.randomUUID(),
+      salt = crypto.randomUUID(),
+      now = Date.now();
+    await this.store.run(
+      "INSERT INTO sessions (id,user_id,csrf,salt,mode,participants,created,expires) VALUES (?,?,?,?,?,?,?,?)",
+      id,
+      userId,
+      await digest(csrf),
+      salt,
+      this.provider.mode,
+      JSON.stringify([...new Set(body.participantIds)]),
+      now,
+      now + 7200000,
+    );
+    return { id, csrf, mode: this.provider.mode, expires: now + 7200000 };
+  }
+  async erase(userId: string) {
+    // Revoke first: an in-flight provider cannot return a result after deletion.
+    await this.store.run(
+      "UPDATE sessions SET revoked=1 WHERE user_id=?",
+      userId,
+    );
+    await this.store.run(
+      "DELETE FROM queries WHERE session_id IN (SELECT id FROM sessions WHERE user_id=?)",
+      userId,
+    );
+    await this.store.run("DELETE FROM sessions WHERE user_id=?", userId);
+  }
+  async session(userId: string, id: unknown, csrf: string | null) {
+    if (typeof id !== "string" || !UUID.test(id))
+      throw new AppError("SESSION", "Sesión no válida.", 403);
+    const row = await this.store.one<SessionRow>(
+      "SELECT * FROM sessions WHERE id=? AND user_id=?",
+      id,
+      userId,
+    );
+    if (
+      !row ||
+      row.revoked ||
+      row.expires < Date.now() ||
+      row.mode !== this.provider.mode
+    )
+      throw new AppError("SESSION", "Sesión caducada. Prepara una nueva.", 403);
+    if (!csrf || (await digest(csrf)) !== row.csrf)
+      throw new AppError("CSRF", "Verificación de sesión no válida.", 403);
+    return row;
+  }
+  async query(
+    userId: string,
+    body: Record<string, unknown>,
+    csrf: string | null,
+  ) {
+    const s = await this.session(userId, body.sessionId, csrf);
+    if (
+      typeof body.requestId !== "string" ||
+      !UUID.test(body.requestId) ||
+      typeof body.noteId !== "string" ||
+      !UUID.test(body.noteId) ||
+      typeof body.text !== "string" ||
+      body.text.length > 20000 ||
+      typeof body.revision !== "string" ||
+      !/^[a-f0-9]{64}$/.test(body.revision)
+    )
+      throw new AppError("INPUT", "Petición no válida.");
+    if ((await digest(body.text)) !== body.revision)
+      throw new AppError("REVISION", "La revisión no coincide con el texto.");
+    const phone = normalizePhone(body.text);
+    const selected = JSON.parse(s.participants) as string[];
+    if (
+      !participants(this.config, userId).some(
+        (p) => p.phone === phone && selected.includes(p.id),
+      )
+    )
+      throw new AppError(
+        "UNAUTHORIZED_PHONE",
+        "Este número no está autorizado para esta sesión.",
+        403,
+      );
+    const phoneHash = await digest(s.salt + phone);
+    const duplicate = await this.store.one<QueryRow>(
+      "SELECT * FROM queries WHERE id=?",
+      body.requestId,
+    );
+    if (duplicate)
+      throw new AppError(
+        "DUPLICATE",
+        "La petición ya se recibió; no se repetirá automáticamente.",
+        409,
+      );
+    await this.rate(userId, "query", 20);
+    await this.rate(s.id, "query-session", 5, 60000);
+    const now = Date.now();
+    const lock = await this.store.one<{ id: string }>(
+      "UPDATE sessions SET active_query=?,lease=?,query_count=query_count+1 WHERE id=? AND revoked=0 AND expires>? AND query_count<10 AND (active_query IS NULL OR lease<?) RETURNING id",
+      body.requestId,
+      now + this.timeout + 3000,
+      s.id,
+      now,
+      now,
+    );
+    if (!lock)
+      throw new AppError(
+        "BUSY_OR_LIMIT",
+        "Hay una consulta pendiente o se agotó el límite de sesión.",
+        409,
+      );
+    try {
+      await this.store.run(
+        "INSERT INTO queries (id,session_id,note_id,revision,phone_hash,status,created) VALUES (?,?,?,?,?,?,?)",
+        body.requestId,
+        s.id,
+        body.noteId,
+        body.revision,
+        phoneHash,
+        "consultando",
+        now,
+      );
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeout);
+      let result;
+      try {
+        result = await Promise.race([
+          this.provider.lookup({
+            requestId: body.requestId,
+            phone,
+            sessionId: s.id,
+            signal: controller.signal,
+          }),
+          new Promise<never>((_, reject) => {
+            controller.signal.addEventListener(
+              "abort",
+              () =>
+                reject(
+                  new AppError(
+                    "TIMEOUT",
+                    "Tiempo de espera agotado. La consulta no se reintenta.",
+                    504,
+                  ),
+                ),
+              { once: true },
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+        controller.abort();
+      }
+      const active = await this.store.one<SessionRow>(
+        "SELECT * FROM sessions WHERE id=? AND user_id=?",
+        s.id,
+        userId,
+      );
+      if (
+        !active ||
+        active.revoked ||
+        active.expires < Date.now() ||
+        active.active_query !== body.requestId
+      )
+        throw new AppError(
+          "STALE_SESSION",
+          "La sesión cambió durante la consulta.",
+          409,
+        );
+      const status = result.found ? "completado" : "sin resultado";
+      const providerMs = Date.now() - now;
+      await this.store.run(
+        "UPDATE queries SET status=?,provider_ms=? WHERE id=?",
+        status,
+        providerMs,
+        body.requestId,
+      );
+      return {
+        requestId: body.requestId,
+        sessionId: s.id,
+        noteId: body.noteId,
+        revision: body.revision,
+        phone,
+        status,
+        result: result.found ? result : null,
+        providerMs,
+      };
+    } catch (error) {
+      const e =
+        error instanceof AppError
+          ? error
+          : new AppError(
+              "NETWORK",
+              "No se pudo contactar con el proveedor.",
+              502,
+            );
+      await this.store.run(
+        "UPDATE queries SET status=?,code=?,provider_ms=? WHERE id=?",
+        e.code === "TIMEOUT" ? "tiempo agotado" : "error",
+        e.code,
+        Date.now() - now,
+        body.requestId,
+      );
+      throw e;
+    } finally {
+      await this.store.run(
+        "UPDATE sessions SET active_query=NULL,lease=0 WHERE id=? AND active_query=?",
+        s.id,
+        body.requestId,
+      );
+    }
+  }
+  async diagnostics(userId: string, id: string, csrf: string | null) {
+    await this.session(userId, id, csrf);
+    return this.store.rows<
+      Pick<QueryRow, "id" | "status" | "code" | "created" | "provider_ms">
+    >(
+      "SELECT id,status,code,created,provider_ms FROM queries WHERE session_id=? ORDER BY created DESC LIMIT 10",
+      id,
+    );
+  }
+}
+
+===== FIN: lib/server/service.ts =====
+
+
+===== ARCHIVO: lib/server/store.ts =====
+export interface Prepared {
+  bind(...args: unknown[]): Prepared;
+  first<T>(): Promise<T | null>;
+  all<T>(): Promise<{ results: T[] }>;
+  run(): Promise<unknown>;
+}
+export interface Database {
+  prepare(sql: string): Prepared;
+}
+export class Store {
+  db: Database;
+  constructor(db: Database) {
+    this.db = db;
+  }
+  one<T>(sql: string, ...args: unknown[]) {
+    return this.db
+      .prepare(sql)
+      .bind(...args)
+      .first<T>();
+  }
+  async rows<T>(sql: string, ...args: unknown[]) {
+    return (
+      await this.db
+        .prepare(sql)
+        .bind(...args)
+        .all<T>()
+    ).results;
+  }
+  run(sql: string, ...args: unknown[]) {
+    return this.db
+      .prepare(sql)
+      .bind(...args)
+      .run();
+  }
+}
+export type SessionRow = {
+  id: string;
+  user_id: string;
+  csrf: string;
+  salt: string;
+  mode: string;
+  participants: string;
+  created: number;
+  expires: number;
+  revoked: number;
+  query_count: number;
+  active_query: string | null;
+  lease: number;
+};
+export type QueryRow = {
+  id: string;
+  session_id: string;
+  note_id: string;
+  revision: string;
+  phone_hash: string;
+  status: string;
+  code: string | null;
+  created: number;
+  provider_ms: number | null;
+};
+
+===== FIN: lib/server/store.ts =====
+
+
+===== ARCHIVO: lib/server/telegram.ts =====
+import {
+  AppError,
+  digest,
+  normalizePhone,
+  validateResult,
+  type QueryResult,
+} from "../domain.ts";
+import type { Provider, ProviderConfig, ProviderInput } from "./providers.ts";
+import type { Store } from "./store.ts";
+
+type Fetcher = (
+  url: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+type State = {
+  cursor: number;
+  request_id: string | null;
+  lease: number;
+  cooldown_until: number;
+};
+type RecordValue = Record<string, unknown>;
+const object = (v: unknown): RecordValue =>
+  v && typeof v === "object" && !Array.isArray(v) ? (v as RecordValue) : {};
+const validId = (v: unknown): v is number =>
+  typeof v === "number" && Number.isSafeInteger(v) && v > 0;
+const timeout = () =>
+  new AppError(
+    "TIMEOUT",
+    "Tiempo de espera agotado. La consulta no se reintenta.",
+    504,
+  );
+class TelegramRateError extends AppError {
+  retryAfter: number;
+  constructor(seconds: number) {
+    super(
+      "PROVIDER_RATE_LIMIT",
+      "Telegram limita las consultas; espera antes de iniciar otra.",
+      429,
+    );
+    this.retryAfter = Math.min(
+      86400,
+      Math.max(1, Number.isFinite(seconds) ? seconds : 60),
+    );
+  }
+}
+
+/** This is a configured protocol, not a claim about the live third-party bot. */
+export function parseTelegramResult(
+  text: string,
+  requestId: string,
+  phone: string,
+  config: ProviderConfig,
+): QueryResult {
+  if (
+    typeof text !== "string" ||
+    new TextEncoder().encode(text).length > 8192 ||
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)
+  )
+    throw new AppError("INVALID_RESULT", "Texto de respuesta no válido.", 502);
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  const numbers = lines.filter((line) => /^Number\s*:/i.test(line));
+  if (numbers.length !== 1)
+    throw new AppError(
+      "INVALID_RESULT",
+      "Campo de número ausente o duplicado.",
+      502,
+    );
+  if (normalizePhone(numbers[0].replace(/^Number\s*:/i, "")) !== phone)
+    throw new AppError(
+      "CORRELATION",
+      "La respuesta no corresponde a esta petición.",
+      502,
+    );
+  const last = lines.filter(Boolean).at(-1);
+  if (config.TELEGRAM_NO_RESULT_TEXT && last === config.TELEGRAM_NO_RESULT_TEXT)
+    return validateResult(
+      { requestId, phone, final: true, found: false },
+      requestId,
+      phone,
+    );
+  if (!config.TELEGRAM_FINAL_SUFFIX || last !== config.TELEGRAM_FINAL_SUFFIX)
+    throw new AppError(
+      "PARTIAL",
+      "Respuesta parcial: falta el marcador final configurado.",
+      502,
+    );
+  const value: RecordValue = { requestId, phone, final: true, found: true };
+  for (const [label, key] of [
+    ["Country", "country"],
+    ["Carrier", "carrier"],
+    ["Name", "name"],
+  ]) {
+    const matches = lines.filter((line) =>
+      new RegExp(`^${label}\\s*:`, "i").test(line),
+    );
+    if (matches.length > 1)
+      throw new AppError(
+        "INVALID_RESULT",
+        "Campo duplicado en la respuesta.",
+        502,
+      );
+    if (matches.length)
+      value[key] = matches[0].replace(
+        new RegExp(`^${label}\\s*:\\s*`, "i"),
+        "",
+      );
+  }
+  return validateResult(value, requestId, phone);
+}
+
+export class TelegramProvider implements Provider {
+  mode = "real" as const;
+  config: ProviderConfig;
+  store: Store;
+  fetcher: Fetcher;
+  target: number;
+  ownId: number;
+  constructor(config: ProviderConfig, store: Store, fetcher: Fetcher = fetch) {
+    this.config = config;
+    this.store = store;
+    this.fetcher = fetcher;
+    this.target = Number(config.TELEGRAM_TARGET_BOT_ID);
+    this.ownId = Number(config.TELEGRAM_BOT_TOKEN?.split(":")[0]);
+    if (
+      !/^\d+:[A-Za-z0-9_-]{10,}$/.test(config.TELEGRAM_BOT_TOKEN ?? "") ||
+      !validId(this.target) ||
+      !validId(this.ownId) ||
+      this.target === this.ownId ||
+      config.TELEGRAM_TARGET_USERNAME !== "TrueCalleRobot" ||
+      config.PROVIDER_AUTHORIZED !== "true" ||
+      config.TELEGRAM_PROTOCOL_CONFIRMED !== "true" ||
+      !config.TELEGRAM_FINAL_SUFFIX ||
+      config.TELEGRAM_FINAL_SUFFIX.length > 100 ||
+      /[\r\n]/.test(config.TELEGRAM_FINAL_SUFFIX) ||
+      (config.TELEGRAM_NO_RESULT_TEXT &&
+        (config.TELEGRAM_NO_RESULT_TEXT.length > 100 ||
+          /[\r\n]/.test(config.TELEGRAM_NO_RESULT_TEXT)))
+    )
+      throw new AppError(
+        "PROVIDER_CONFIG",
+        "Faltan configuración, permiso o protocolo confirmado de Telegram.",
+        503,
+      );
+  }
+  async call(
+    method:
+      | "getMe"
+      | "getWebhookInfo"
+      | "getChat"
+      | "sendMessage"
+      | "getUpdates",
+    body: RecordValue,
+    signal: AbortSignal,
+  ): Promise<unknown> {
+    if (signal.aborted) throw timeout();
+    let response: Response;
+    try {
+      response = await this.fetcher(
+        `https://api.telegram.org/bot${this.config.TELEGRAM_BOT_TOKEN}/${method}`,
+        {
+          method: "POST",
+          redirect: "error",
+          signal,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+    } catch {
+      // fetch exceptions may contain the URL, which embeds the token. Never expose them.
+      if (signal.aborted) throw timeout();
+      throw new AppError(
+        "TELEGRAM_NETWORK",
+        "No se pudo comunicar con Telegram. El envío no se repite.",
+        502,
+      );
+    }
+    if (signal.aborted) throw timeout();
+    const reader = response.body?.getReader();
+    if (!reader)
+      throw new AppError("INVALID_RESULT", "Respuesta vacía de Telegram.", 502);
+    let content = "",
+      size = 0;
+    const decoder = new TextDecoder();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (signal.aborted) {
+          await reader.cancel();
+          throw timeout();
+        }
+        size += value.byteLength;
+        if (size > 131072) {
+          await reader.cancel();
+          throw new AppError(
+            "INVALID_RESULT",
+            "Respuesta excesiva de Telegram.",
+            502,
+          );
+        }
+        content += decoder.decode(value, { stream: true });
+      }
+    } catch (e) {
+      if (e instanceof AppError) throw e;
+      if (signal.aborted) throw timeout();
+      throw new AppError(
+        "TELEGRAM_NETWORK",
+        "Lectura de Telegram interrumpida.",
+        502,
+      );
+    }
+    if (signal.aborted) throw timeout();
+    let value: RecordValue;
+    try {
+      value = object(JSON.parse(content + decoder.decode()));
+    } catch {
+      throw new AppError("INVALID_RESULT", "JSON de Telegram no válido.", 502);
+    }
+    if (response.status === 429 || value.error_code === 429)
+      throw new TelegramRateError(Number(object(value.parameters).retry_after));
+    if (response.status === 409 || value.error_code === 409)
+      throw new AppError(
+        "TELEGRAM_CONSUMER_CONFLICT",
+        "El bot tiene otro consumidor o webhook. Usa un bot dedicado.",
+        503,
+      );
+    if (!response.ok || value.ok !== true) {
+      if (/bot[ _-]?to[ _-]?bot/i.test(String(value.description ?? "")))
+        throw new AppError(
+          "TELEGRAM_BOT_TO_BOT_DISABLED",
+          "Telegram rechaza la comunicación entre bots. Revisa la configuración de ambos.",
+          503,
+        );
+      throw new AppError(
+        "TELEGRAM_API",
+        "Telegram rechazó la operación. Comprueba el bot y los permisos.",
+        502,
+      );
+    }
+    return value.result;
+  }
+  async check(signal: AbortSignal) {
+    const me = object(await this.call("getMe", {}, signal));
+    if (me.is_bot !== true || me.id !== this.ownId)
+      throw new AppError(
+        "TELEGRAM_AUTH",
+        "El token no corresponde al bot propio configurado.",
+        503,
+      );
+    const webhook = object(await this.call("getWebhookInfo", {}, signal));
+    if (typeof webhook.url !== "string" || webhook.url)
+      throw new AppError(
+        "TELEGRAM_WEBHOOK",
+        "Usa un bot dedicado sin webhook activo. No se modificará su configuración.",
+        503,
+      );
+    const chat = object(
+      await this.call(
+        "getChat",
+        { chat_id: `@${this.config.TELEGRAM_TARGET_USERNAME}` },
+        signal,
+      ),
+    );
+    if (
+      chat.id !== this.target ||
+      chat.type !== "private" ||
+      String(chat.username).toLowerCase() !==
+        this.config.TELEGRAM_TARGET_USERNAME!.toLowerCase()
+    )
+      throw new AppError(
+        "TELEGRAM_TARGET",
+        "El ID de conversación no corresponde al bot destinatario configurado.",
+        503,
+      );
+    return {
+  

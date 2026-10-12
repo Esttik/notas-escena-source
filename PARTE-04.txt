@@ -1,0 +1,869 @@
+eError("INPUT", 400);
+      if (input.phone !== validateHolder(holder).phone)
+        throw new BridgeError("OWN_PHONE_ONLY", 403);
+      if (abort.signal.aborted) throw new BridgeError("TIMEOUT", 504);
+      const result = await lookup(input, abort.signal);
+      if (abort.signal.aborted) throw new BridgeError("TIMEOUT", 504);
+      return response(
+        200,
+        validateResult(result, input.requestId, input.phone),
+      );
+    } catch (error) {
+      const e =
+        error instanceof BridgeError
+          ? error
+          : error instanceof AppError
+            ? new BridgeError(error.code, error.status)
+            : new BridgeError("INTERNAL", 500);
+      // Constants only: never log exception objects, request bodies or responses.
+      if (e.status >= 500) console.error(e.code);
+      return response(e.status, {
+        code: e.code,
+        error:
+          "No se pudo completar la consulta. Revisa el diagnóstico del servidor.",
+      });
+    } finally {
+      clearTimeout(timer);
+      req.signal.removeEventListener("abort", cancel);
+    }
+  };
+}
+
+===== FIN: bridge/src/cloud-http.ts =====
+
+
+===== ARCHIVO: bridge/src/cloud-ledger.ts =====
+import { createHmac } from "node:crypto";
+import { BridgeError } from "./errors.ts";
+export interface SqlClient {
+  query(
+    sql: string,
+    values?: unknown[],
+  ): Promise<{ rows: Record<string, unknown>[] }>;
+  release(): void;
+}
+export interface SqlPool {
+  connect(): Promise<SqlClient>;
+}
+export class CloudLedger {
+  private pool: SqlPool;
+  private salt: string;
+  private clock: () => number;
+  constructor(pool: SqlPool, salt: string, clock = Date.now) {
+    this.pool = pool;
+    this.salt = salt;
+    this.clock = clock;
+  }
+  async claim(requestId: string, phone: string, sessionId: string) {
+    const client = await this.pool.connect();
+    const now = this.clock();
+    const fingerprint = createHmac("sha256", this.salt)
+      .update(JSON.stringify([phone, sessionId]))
+      .digest("hex");
+    try {
+      await client.query("BEGIN");
+      // One row lock serializes claims and rate accounting across all instances.
+      const {
+        rows: [lock],
+      } = await client.query("SELECT * FROM bridge_lock WHERE id=1 FOR UPDATE");
+      if (!lock) throw new BridgeError("LEDGER_CONFIG", 503);
+      await client.query("DELETE FROM bridge_requests WHERE created<$1", [
+        now - 86400000,
+      ]);
+      await client.query("DELETE FROM bridge_limits WHERE id<$1", [
+        Math.floor(now / 3600000),
+      ]);
+      const {
+        rows: [old],
+      } = await client.query(
+        "SELECT fingerprint FROM bridge_requests WHERE id=$1",
+        [requestId],
+      );
+      if (old)
+        throw new BridgeError(
+          old.fingerprint === fingerprint ? "DUPLICATE" : "PAYLOAD_MISMATCH",
+          409,
+        );
+      const {
+        rows: [rate],
+      } = await client.query("SELECT count FROM bridge_limits WHERE id=$1", [
+        Math.floor(now / 3600000),
+      ]);
+      if (Number(rate?.count ?? 0) >= 20)
+        throw new BridgeError("RATE_LIMIT", 429);
+      if (Number(lock.lease) >= now || Number(lock.cooldown) > now)
+        throw new BridgeError("BUSY_OR_COOLDOWN", 409);
+      await client.query(
+        "INSERT INTO bridge_requests VALUES($1,$2,'pending',$3)",
+        [requestId, fingerprint, now],
+      );
+      await client.query(
+        "INSERT INTO bridge_limits VALUES($1,1) ON CONFLICT(id) DO UPDATE SET count=bridge_limits.count+1",
+        [Math.floor(now / 3600000)],
+      );
+      await client.query(
+        "UPDATE bridge_lock SET request_id=$1,lease=$2 WHERE id=1",
+        [requestId, now + 90000],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async finish(id: string, status: string, cooldownMs = 2000) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT id FROM bridge_lock WHERE id=1 FOR UPDATE");
+      await client.query("UPDATE bridge_requests SET status=$1 WHERE id=$2", [
+        status,
+        id,
+      ]);
+      await client.query(
+        "UPDATE bridge_lock SET request_id=NULL,lease=0,cooldown=GREATEST(cooldown,$1) WHERE id=1 AND request_id=$2",
+        [this.clock() + cooldownMs, id],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+===== FIN: bridge/src/cloud-ledger.ts =====
+
+
+===== ARCHIVO: bridge/src/engine.ts =====
+import {
+  AppError,
+  normalizePhone,
+  type QueryResult,
+} from "../../lib/domain.ts";
+import { parseTelegramResult } from "../../lib/server/telegram.ts";
+import { BridgeError } from "./errors.ts";
+export interface QueryLedger {
+  claim(
+    requestId: string,
+    phone: string,
+    sessionId: string,
+  ): void | Promise<void>;
+  finish(
+    requestId: string,
+    status: string,
+    cooldownMs: number,
+  ): void | Promise<void>;
+}
+export type Message = {
+  id: number;
+  senderId: string;
+  chatId: string;
+  replyTo?: number;
+  text: string;
+};
+export interface Transport {
+  verify(signal: AbortSignal): Promise<{
+    phone: string;
+    targetId: string;
+    targetBot: boolean;
+    targetUsername: string;
+  }>;
+  send(phone: string, signal: AbortSignal, requestId: string): Promise<number>;
+  messages(sentId: number, signal: AbortSignal): Promise<Message[]>;
+  close?(): Promise<void>;
+}
+type Input = { requestId: string; sessionId: string; phone: string };
+type Options = {
+  finalSuffix: string;
+  noResultText?: string;
+  timeoutMs?: number;
+  pollMs?: number;
+};
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export class BridgeEngine {
+  transport: Transport;
+  ledger: QueryLedger;
+  options: Options;
+  constructor(transport: Transport, ledger: QueryLedger, options: Options) {
+    if (
+      !options.finalSuffix ||
+      options.finalSuffix.length > 100 ||
+      /[\r\n]/.test(options.finalSuffix)
+    )
+      throw new BridgeError("PROTOCOL_CONFIG", 503);
+    this.transport = transport;
+    this.ledger = ledger;
+    this.options = options;
+  }
+  async lookup(input: Input, signal: AbortSignal): Promise<QueryResult> {
+    const started = Date.now(),
+      timeoutMs = this.options.timeoutMs ?? 10000;
+    const alive = () => {
+      if (signal.aborted || Date.now() - started >= timeoutMs)
+        throw new BridgeError("TIMEOUT", 504);
+    };
+    alive();
+    if (
+      !UUID.test(input.requestId) ||
+      !UUID.test(input.sessionId) ||
+      normalizePhone(input.phone) !== input.phone
+    )
+      throw new BridgeError("INPUT", 400);
+    await this.ledger.claim(input.requestId, input.phone, input.sessionId);
+    let state = "error",
+      cooldown = 60000;
+    try {
+      alive();
+      const target = await this.transport.verify(signal);
+      alive();
+      if (
+        target.targetId !== "6108968969" ||
+        !target.targetBot ||
+        target.targetUsername.toLowerCase() !== "truecallerobot"
+      )
+        throw new BridgeError("TARGET", 503);
+      if (target.phone !== input.phone)
+        throw new BridgeError("OWN_PHONE_ONLY", 403);
+      const sent = await this.transport.send(
+        input.phone,
+        signal,
+        input.requestId,
+      );
+      alive();
+      if (!Number.isSafeInteger(sent) || sent < 1)
+        throw new BridgeError("SEND_UNCONFIRMED");
+      const seen = new Set<string>();
+      for (let poll = 0; poll < 30; poll++) {
+        alive();
+        const messages = await this.transport.messages(sent, signal);
+        alive();
+        if (!Array.isArray(messages) || messages.length > 20)
+          throw new BridgeError("INVALID_RESULT");
+        for (const m of messages) {
+          if (
+            m.senderId !== target.targetId ||
+            m.chatId !== target.targetId ||
+            m.replyTo !== sent ||
+            !Number.isSafeInteger(m.id) ||
+            m.id <= sent ||
+            typeof m.text !== "string"
+          )
+            continue;
+          if (m.text.length > 8192) throw new BridgeError("INVALID_RESULT");
+          const key = JSON.stringify([m.id, m.text]);
+          if (seen.has(key)) continue;
+          if (seen.size >= 100) throw new BridgeError("MESSAGE_LIMIT");
+          seen.add(key);
+          try {
+            const result = parseTelegramResult(
+              m.text,
+              input.requestId,
+              input.phone,
+              {
+                TELEGRAM_FINAL_SUFFIX: this.options.finalSuffix,
+                TELEGRAM_NO_RESULT_TEXT: this.options.noResultText,
+              },
+            );
+            alive();
+            state = "complete";
+            cooldown = 2000;
+            return result;
+          } catch (e) {
+            if (e instanceof AppError && e.code === "PARTIAL") continue;
+            throw e;
+          }
+        }
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => {
+            clearTimeout(timer);
+            reject(new BridgeError("TIMEOUT", 504));
+          };
+          const timer = setTimeout(() => {
+            signal.removeEventListener("abort", abort);
+            resolve();
+          }, this.options.pollMs ?? 500);
+          if (signal.aborted) abort();
+          else signal.addEventListener("abort", abort, { once: true });
+        });
+      }
+      throw new BridgeError("TIMEOUT", 504);
+    } catch (e) {
+      if (e instanceof BridgeError) throw e;
+      if (e instanceof AppError) throw new BridgeError(e.code, e.status);
+      const error = e as {
+        errorMessage?: string;
+        seconds?: number;
+        name?: string;
+      };
+      if (
+        signal.aborted ||
+        error?.name === "TimeoutError" ||
+        error?.name === "AbortError"
+      )
+        throw new BridgeError("TIMEOUT", 504);
+      if (/^FLOOD_WAIT/.test(error?.errorMessage ?? "")) {
+        cooldown = Math.min(
+          86400000,
+          Math.max(60000, Number(error.seconds || 60) * 1000),
+        );
+        throw new BridgeError("TELEGRAM_RATE_LIMIT", 429);
+      }
+      throw new BridgeError("TELEGRAM_FAILURE");
+    } finally {
+      try {
+        await this.transport.close?.();
+      } finally {
+        await this.ledger.finish(input.requestId, state, cooldown);
+      }
+    }
+  }
+}
+
+===== FIN: bridge/src/engine.ts =====
+
+
+===== ARCHIVO: bridge/src/errors.ts =====
+export class BridgeError extends Error {
+  code: string;
+  status: number;
+  constructor(code: string, status = 502) {
+    super(code);
+    this.code = code;
+    this.status = status;
+  }
+}
+// Allowlisted RPC codes only: never expose the request, phone, code or message.
+export function loginError(error: unknown): BridgeError {
+  if (error instanceof BridgeError) return error;
+  const code = (error as { errorMessage?: unknown } | null)?.errorMessage;
+  const allowed = new Set([
+    "API_ID_INVALID",
+    "API_ID_PUBLISHED_FLOOD",
+    "PHONE_NUMBER_INVALID",
+    "PHONE_NUMBER_BANNED",
+    "PHONE_CODE_INVALID",
+    "PHONE_CODE_EXPIRED",
+    "PHONE_CODE_EMPTY",
+    "PASSWORD_HASH_INVALID",
+    "AUTH_RESTART",
+    "SESSION_REVOKED",
+    "AUTH_KEY_UNREGISTERED",
+  ]);
+  if (typeof code === "string" && allowed.has(code))
+    return new BridgeError(code, 503);
+  if (
+    typeof code === "string" &&
+    /^(?:PHONE|NETWORK|USER)_MIGRATE_\d+$/.test(code)
+  )
+    return new BridgeError("TELEGRAM_DC_MIGRATION", 503);
+  if (typeof code === "string" && /^FLOOD_WAIT_\d+$/.test(code))
+    return new BridgeError("TELEGRAM_RATE_LIMIT", 429);
+  return new BridgeError("TELEGRAM_LOGIN", 503);
+}
+
+===== FIN: bridge/src/errors.ts =====
+
+
+===== ARCHIVO: bridge/src/http.ts =====
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { createHash, timingSafeEqual } from "node:crypto";
+import {
+  AppError,
+  normalizePhone,
+  validateResult,
+  type QueryResult,
+} from "../../lib/domain.ts";
+import { BridgeError } from "./errors.ts";
+type Input = { requestId: string; sessionId: string; phone: string };
+type Lookup = {
+  lookup(input: Input, signal: AbortSignal): Promise<QueryResult>;
+};
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function body(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 2048) {
+        reject(new BridgeError("BODY_LIMIT", 413));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", () => reject(new BridgeError("INPUT", 400)));
+  });
+}
+function send(res: ServerResponse, status: number, value: unknown) {
+  res.writeHead(status, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+  });
+  res.end(JSON.stringify(value));
+}
+export function createHandler(engine: Lookup, secret: string) {
+  if (secret.length < 40) throw new BridgeError("BEARER_CONFIG", 503);
+  const expected = createHash("sha256").update(`Bearer ${secret}`).digest();
+  return async (req: IncomingMessage, res: ServerResponse) => {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 11000);
+    res.on("close", () => {
+      if (!res.writableEnded) abort.abort();
+    });
+    try {
+      if (req.method === "GET" && req.url === "/health") {
+        send(res, 200, { ok: true, service: "telegram-user-bridge" });
+        return;
+      }
+      const supplied = createHash("sha256")
+        .update(req.headers.authorization ?? "")
+        .digest();
+      if (!timingSafeEqual(supplied, expected))
+        throw new BridgeError("UNAUTHORIZED", 401);
+      if (req.headers.origin) throw new BridgeError("ORIGIN", 403);
+      if (req.method !== "POST" || req.url !== "/lookup")
+        throw new BridgeError("NOT_FOUND", 404);
+      if (req.headers["content-type"] !== "application/json")
+        throw new BridgeError("CONTENT_TYPE", 415);
+      if (Number(req.headers["content-length"]) > 2048) {
+        req.resume();
+        throw new BridgeError("BODY_LIMIT", 413);
+      }
+      let value: unknown;
+      try {
+        value = JSON.parse(await body(req));
+      } catch (e) {
+        if (e instanceof BridgeError) throw e;
+        throw new BridgeError("INPUT", 400);
+      }
+      if (!value || typeof value !== "object" || Array.isArray(value))
+        throw new BridgeError("INPUT", 400);
+      const input = value as Input;
+      if (
+        Object.keys(value).sort().join(",") !== "phone,requestId,sessionId" ||
+        typeof input.phone !== "string" ||
+        typeof input.requestId !== "string" ||
+        typeof input.sessionId !== "string" ||
+        !UUID.test(input.requestId) ||
+        !UUID.test(input.sessionId) ||
+        req.headers["idempotency-key"] !== input.requestId ||
+        normalizePhone(input.phone) !== input.phone
+      )
+        throw new BridgeError("INPUT", 400);
+      const result = await engine.lookup(input, abort.signal);
+      if (abort.signal.aborted) throw new BridgeError("TIMEOUT", 504);
+      send(res, 200, validateResult(result, input.requestId, input.phone));
+    } catch (error) {
+      const e =
+        error instanceof BridgeError
+          ? error
+          : error instanceof AppError
+            ? new BridgeError(error.code, error.status)
+            : new BridgeError("INTERNAL", 500);
+      if (!res.destroyed)
+        send(res, e.status, {
+          code: e.code,
+          error:
+            "No se pudo completar la consulta. Revisa el diagnóstico del servidor.",
+        });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
+===== FIN: bridge/src/http.ts =====
+
+
+===== ARCHIVO: bridge/src/ledger.ts =====
+import { DatabaseSync } from "node:sqlite";
+import { createHmac } from "node:crypto";
+import { BridgeError } from "./errors.ts";
+export class Ledger {
+  db: DatabaseSync;
+  salt: string;
+  constructor(path: string, salt: string) {
+    this.salt = salt;
+    this.db = new DatabaseSync(path);
+    this.db.exec(`PRAGMA busy_timeout=3000;
+      CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, status TEXT NOT NULL, created INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS lock (id INTEGER PRIMARY KEY, request_id TEXT, lease INTEGER NOT NULL DEFAULT 0, cooldown INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS limits (id INTEGER PRIMARY KEY, count INTEGER NOT NULL);
+      INSERT OR IGNORE INTO lock (id) VALUES (1);`);
+  }
+  claim(requestId: string, phone: string, sessionId: string) {
+    const now = Date.now();
+    this.db.prepare("DELETE FROM requests WHERE created<?").run(now - 86400000);
+    const fingerprint = createHmac("sha256", this.salt)
+      .update(JSON.stringify([phone, sessionId]))
+      .digest("hex");
+    const old = this.db
+      .prepare("SELECT fingerprint FROM requests WHERE id=?")
+      .get(requestId);
+    if (old)
+      throw new BridgeError(
+        old.fingerprint === fingerprint ? "DUPLICATE" : "PAYLOAD_MISMATCH",
+        409,
+      );
+    const window = Math.floor(now / 3600000);
+    this.db.prepare("DELETE FROM limits WHERE id<?").run(window);
+    const rate = this.db
+      .prepare(
+        "INSERT INTO limits VALUES (?,1) ON CONFLICT(id) DO UPDATE SET count=count+1 RETURNING count",
+      )
+      .get(window);
+    if (Number(rate?.count) > 20) throw new BridgeError("RATE_LIMIT", 429);
+    try {
+      this.db
+        .prepare("INSERT INTO requests VALUES (?,?,'pending',?)")
+        .run(requestId, fingerprint, now);
+    } catch {
+      throw new BridgeError("DUPLICATE", 409);
+    }
+    const locked = this.db
+      .prepare(
+        "UPDATE lock SET request_id=?,lease=? WHERE id=1 AND lease<? AND cooldown<=? RETURNING id",
+      )
+      .get(requestId, now + 90000, now, now);
+    if (!locked) {
+      this.db
+        .prepare("UPDATE requests SET status='not_sent' WHERE id=?")
+        .run(requestId);
+      throw new BridgeError("BUSY_OR_COOLDOWN", 409);
+    }
+  }
+  finish(id: string, status: string, cooldownMs = 2000) {
+    this.db.prepare("UPDATE requests SET status=? WHERE id=?").run(status, id);
+    this.db
+      .prepare(
+        "UPDATE lock SET request_id=NULL,lease=0,cooldown=MAX(cooldown,?) WHERE id=1 AND request_id=?",
+      )
+      .run(Date.now() + cooldownMs, id);
+  }
+  close() {
+    this.db.close();
+  }
+}
+
+===== FIN: bridge/src/ledger.ts =====
+
+
+===== ARCHIVO: bridge/src/login-challenge.ts =====
+import { BridgeError, loginError } from "./errors.ts";
+
+export class LoginChallenge {
+  id = 0;
+  kind: "code" | "password" = "code";
+  length: number | undefined;
+  delivery = "app";
+  error = "";
+  failures = 0;
+  pending: {
+    resolve: (value: string) => void;
+    reject: (error: Error) => void;
+  } | null = null;
+
+  wait(kind: "code" | "password", length?: number, delivery = "app") {
+    if (this.pending) throw new BridgeError("CHALLENGE_BUSY", 409);
+    this.kind = kind;
+    this.length =
+      Number.isSafeInteger(length) && length! > 0 && length! <= 20
+        ? length
+        : undefined;
+    this.delivery = ["app", "sms", "call"].includes(delivery)
+      ? delivery
+      : "other";
+    this.id++;
+    return new Promise<string>((resolve, reject) => {
+      this.pending = { resolve, reject };
+    });
+  }
+
+  submit(id: unknown, value: unknown) {
+    if (!this.pending || id !== this.id)
+      throw new BridgeError("STALE_CHALLENGE", 409);
+    if (typeof value !== "string" || !value || value.length > 511)
+      throw new BridgeError("INPUT", 400);
+    if (this.kind === "code") {
+      value = value.trim().replace(/[ -]/g, "");
+      if (
+        !/^\d+$/.test(value as string) ||
+        (this.length && (value as string).length !== this.length)
+      )
+        throw new BridgeError("CODE_FORMAT", 400);
+    }
+    const pending = this.pending;
+    this.pending = null;
+    this.error = "";
+    pending.resolve(value as string);
+  }
+
+  recover(error: unknown) {
+    const safe = loginError(error);
+    if (
+      ![
+        "PHONE_CODE_INVALID",
+        "PHONE_CODE_EMPTY",
+        "PASSWORD_HASH_INVALID",
+      ].includes(safe.code) ||
+      ++this.failures >= 3
+    )
+      throw safe;
+    this.error = safe.code;
+  }
+
+  cancel() {
+    const pending = this.pending;
+    this.pending = null;
+    pending?.reject(new BridgeError("LOGIN_TIMEOUT", 504));
+  }
+}
+
+===== FIN: bridge/src/login-challenge.ts =====
+
+
+===== ARCHIVO: bridge/src/login.ts =====
+import { randomBytes, randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync, chmodSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { normalizePhone } from "../../lib/domain.ts";
+import { makeClient } from "./telegram-client.ts";
+import { saveSession, stateDirectory } from "./vault.ts";
+import { BridgeError, loginError } from "./errors.ts";
+export async function hiddenInput(label: string): Promise<string> {
+  if (!process.stdin.isTTY)
+    throw new BridgeError("INTERACTIVE_TERMINAL_REQUIRED", 503);
+  process.stdout.write(label);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  return new Promise((resolve, reject) => {
+    let value = "";
+    const done = () => {
+      process.stdin.off("data", data);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      process.stdout.write("\n");
+    };
+    const data = (chunk: Buffer) => {
+      for (const char of chunk.toString("utf8")) {
+        if (char === "\u0003") {
+          done();
+          reject(new BridgeError("LOGIN_CANCELLED", 400));
+          return;
+        }
+        if (char === "\r" || char === "\n") {
+          done();
+          resolve(value);
+          return;
+        }
+        if (char === "\u007f" || char === "\b") value = value.slice(0, -1);
+        else if (char >= " " && value.length < 512) value += char;
+      }
+    };
+    process.stdin.on("data", data);
+  });
+}
+function saveEnvironment(values: Record<string, string>) {
+  let original = existsSync(".env") ? readFileSync(".env", "utf8") : "";
+  for (const [name, value] of Object.entries(values)) {
+    original = original.replace(new RegExp(`^${name}=.*(?:\\n|$)`, "gm"), "");
+    original += `\n${name}=${JSON.stringify(value)}\n`;
+    process.env[name] = value;
+  }
+  writeFileSync(".env", original, { mode: 0o600 });
+  chmodSync(".env", 0o600);
+}
+async function main() {
+  console.log(
+    "Vincular una sesión NUEVA de tu cuenta de Telegram al puente propio. La API de usuario permite acceso amplio a tu cuenta; este programa solo consulta @TrueCalleRobot y tu teléfono. Puedes revocarla en Telegram → Ajustes → Dispositivos. No se extrae ninguna sesión existente.",
+  );
+  const consent = await hiddenInput(
+    "Para autorizar esta sesión y la consulta de tu propio teléfono, escribe AUTORIZO: ",
+  );
+  if (consent !== "AUTORIZO") throw new BridgeError("LOGIN_CANCELLED", 400);
+  const apiId =
+    process.env.TELEGRAM_API_ID ||
+    (await hiddenInput("API ID de my.telegram.org (entrada oculta): "));
+  const apiHash =
+    process.env.TELEGRAM_API_HASH ||
+    (await hiddenInput("API hash de my.telegram.org (entrada oculta): "));
+  if (!/^\d+$/.test(apiId) || !/^[a-f0-9]{32}$/i.test(apiHash))
+    throw new BridgeError("APPLICATION_CREDENTIALS", 400);
+  const phone = normalizePhone(
+    await hiddenInput("Tu móvil español, con +34 (entrada oculta): "),
+  );
+  const encryptionKey =
+    process.env.BRIDGE_ENCRYPTION_KEY || randomBytes(32).toString("base64");
+  saveEnvironment({
+    TELEGRAM_API_ID: apiId,
+    TELEGRAM_API_HASH: apiHash,
+    BRIDGE_ENCRYPTION_KEY: encryptionKey,
+    BRIDGE_BEARER_TOKEN:
+      process.env.BRIDGE_BEARER_TOKEN || randomBytes(32).toString("hex"),
+  });
+  const client = makeClient("", true);
+  try {
+    await client.start({
+      phoneNumber: async () => phone,
+      phoneCode: () =>
+        hiddenInput("Código recibido de Telegram (entrada oculta): "),
+      password: () =>
+        hiddenInput(
+          "Contraseña de verificación en dos pasos, si Telegram la exige (entrada oculta): ",
+        ),
+      firstAndLastNames: async () => {
+        throw new BridgeError("EXISTING_ACCOUNT_REQUIRED", 400);
+      },
+      reCaptchaCallback: async () => {
+        throw new BridgeError("CAPTCHA_REQUIRES_OWNER", 403);
+      },
+      onError: (e) => {
+        throw loginError(e);
+      },
+    });
+    const me = await client.getMe();
+    if (me.bot || !me.phone || normalizePhone("+" + me.phone) !== phone)
+      throw new BridgeError("ACCOUNT_MISMATCH", 403);
+    saveSession(client.session.save(), encryptionKey);
+    const holder = {
+      phone,
+      consentRef: "owner-login:" + randomUUID(),
+      ownershipVerifiedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(),
+      scope: "lookup",
+    };
+    writeFileSync(
+      join(stateDirectory(), "holder.json"),
+      JSON.stringify(holder),
+      { mode: 0o600 },
+    );
+    console.log(
+      "Sesión vinculada y cifrada. No se ha enviado ningún teléfono al bot. La activación de la consulta requiere comprobar el protocolo y conectar el servidor HTTPS a Notas.",
+    );
+  } finally {
+    await client.disconnect();
+  }
+}
+main().catch((e) => {
+  console.error(e instanceof BridgeError ? e.code : "LOGIN_FAILED");
+  process.exitCode = 1;
+});
+
+===== FIN: bridge/src/login.ts =====
+
+
+===== ARCHIVO: bridge/src/server.ts =====
+import { createServer } from "node:http";
+import { join } from "node:path";
+import { chmodSync } from "node:fs";
+import { makeClient, UserTransport } from "./telegram-client.ts";
+import { stateDirectory, loadSession } from "./vault.ts";
+import { Ledger } from "./ledger.ts";
+import { BridgeEngine } from "./engine.ts";
+import { BridgeError } from "./errors.ts";
+import { createHandler } from "./http.ts";
+async function main() {
+  const key = process.env.BRIDGE_ENCRYPTION_KEY ?? "",
+    secret = process.env.BRIDGE_BEARER_TOKEN ?? "";
+  if (secret.length < 40) throw new BridgeError("BEARER_CONFIG", 503);
+  const host = process.env.BRIDGE_HOST || "127.0.0.1",
+    port = Number(process.env.PORT || 8788);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535)
+    throw new BridgeError("PORT_CONFIG", 503);
+  const client = makeClient(loadSession(key));
+  const dbPath = join(stateDirectory(), "ledger.sqlite"),
+    ledger = new Ledger(dbPath, secret);
+  chmodSync(dbPath, 0o600);
+  let engine: BridgeEngine;
+  try {
+    engine = new BridgeEngine(new UserTransport(client), ledger, {
+      finalSuffix: process.env.TELEGRAM_FINAL_SUFFIX ?? "",
+      noResultText: process.env.TELEGRAM_NO_RESULT_TEXT,
+    });
+    await client.connect();
+  } catch (e) {
+    ledger.close();
+    await client.disconnect();
+    throw e;
+  }
+  const server = createServer(createHandler(engine, secret));
+  server.requestTimeout = 12000;
+  server.headersTimeout = 5000;
+  server.maxHeadersCount = 30;
+  server.keepAliveTimeout = 5000;
+  server.listen(port, host, () =>
+    console.log(
+      `Puente disponible en ${host}:${port}. No expongas este puerto sin HTTPS.`,
+    ),
+  );
+  server.on("error", () => {
+    console.error("BRIDGE_LISTEN");
+    process.exitCode = 1;
+    void client.disconnect();
+    ledger.close();
+  });
+  const stop = () => {
+    server.closeAllConnections();
+    server.close(() => {
+      ledger.close();
+      void client.disconnect().finally(() => process.exit(0));
+    });
+  };
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+}
+main().catch((e) => {
+  console.error(e instanceof BridgeError ? e.code : "BRIDGE_START");
+  process.exitCode = 1;
+});
+
+===== FIN: bridge/src/server.ts =====
+
+
+===== ARCHIVO: bridge/src/session-record.ts =====
+import type { TelegramClient } from "teleproto";
+import { randomUUID } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { normalizePhone } from "../../lib/domain.ts";
+import { saveSession, stateDirectory } from "./vault.ts";
+import { BridgeError } from "./errors.ts";
+export async function recordSession(client: TelegramClient, phone: string) {
+  const me = await client.getMe();
+  if (me.bot || !me.phone || normalizePhone("+" + me.phone) !== phone)
+    throw new BridgeError("ACCOUNT_MISMATCH", 403);
+  const session = client.session.save();
+  if (typeof session !== "string" || !session)
+    throw new BridgeError("SESSION_SAVE", 503);
+  saveSession(session, process.env.BRIDGE_ENCRYPTION_KEY ?? "");
+  const holder = {
+    phone,
+    consentRef: "owner-login:" + randomUUID(),
+    ownershipVerifiedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(),
+    scope: "lookup",
+  };
+  writeFileSync(join(stateDirectory(), "holder.json"), JSON.stringify(holder), {
+    mode: 0o600,
+  });
+}
+
+===== FIN: bridge/src/session-record.ts =====
+
+
+===== ARCHIVO: bridge/src/setup-page.ts =====
+export function setupPage(nonce: string, token: string) {
+  return `<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Vincular Notas Escena</title>
+<style nonce="${nonce}">body{font:17px system-ui;background:#f3f3f6;color:#222;margin:0;padding:32px}main{max-width:580px;margin:auto;background:white;padding:28px;border-radius:22px}h1{font-size:28px}p{line-height:1.5}label{display:block;margin:22px 0 8px}input{box-sizing:border-box;width:100%;font:inherit;padding:14px;border:1px solid #bbb;border-radius:10px}button{font:600 17px system-ui;padding:14px 22px;margin-top:24px;background:#edbd00;border:0;border-radius:12px}button:disabled{opacity:.5}small{color:#666;line-height:1.5;display:block}#result{white-space:pre-wrap}</style>
+<main><h1>Vincular tu cuenta</h1><p>Esta página local conecta una <b>sesión nueva</b> de tu cuenta de Telegram al servidor de Notas Escena. Como cualquier cliente de Telegram, tendrá acceso

@@ -1,0 +1,632 @@
+Notas Escena 0.2.1 — copia de código sin secretos.
+Los controles de autorización permanecen intactos. Los datos y configuración privados no se incluyen.
+
+
+===== ARCHIVO: .dockerignore =====
+**/node_modules
+**/.env
+**/.env.*
+**/.bridge-state
+.git
+.wrangler
+.sites-runtime
+.agents
+.codex
+dist
+outputs
+test-results
+
+===== FIN: .dockerignore =====
+
+
+===== ARCHIVO: .env.example =====
+# Local development uses the starter's loopback-only simulated ChatGPT identity.
+# Hosted private Sites uses real platform authentication (no app auth secret needed).
+PROVIDER_MODE=demo
+
+# Real integration: configure runtime env through Sites, not this tracked file.
+# These names belong to SERVER ONLY. Never use NEXT_PUBLIC_ prefixes.
+# PROVIDER_MODE=real
+# PROVIDER_API_URL=https://your-authorized-service.example/api/lookup
+# PROVIDER_API_TOKEN=
+# PROVIDER_AUTHORIZED=true
+# AUTHORIZED_PARTICIPANTS_JSON=[]
+# Expected grant: id,label,phone,artistId,consentRef,ownershipVerifiedAt,
+# expiresAt,scope="lookup",provider=exact PROVIDER_API_URL.
+# Add ONLY previously verified holders with scoped explicit consent.
+
+# Alternative real transport: dedicated own bot, private bot-to-bot.
+# Keep demo active until the provider confirms permission and protocol.
+# PROVIDER_MODE=real
+# PROVIDER_TRANSPORT=telegram
+# PROVIDER_AUTHORIZED=true
+# TELEGRAM_BOT_TOKEN=
+# TELEGRAM_TARGET_USERNAME=TrueCalleRobot
+# TELEGRAM_TARGET_BOT_ID=
+# TELEGRAM_PROTOCOL_CONFIRMED=true
+# TELEGRAM_FINAL_SUFFIX=
+# TELEGRAM_NO_RESULT_TEXT=
+# Grants' provider must equal telegram:@TrueCalleRobot:<confirmed numeric ID>.
+# No token/target ID/final marker is supplied or assumed by this example.
+
+# User-account MTProto bridge (separate Node service): see bridge/README.md.
+# Reuses PROVIDER_TRANSPORT=http and the HTTPS /lookup contract above.
+# Application API ID/hash, encryption key and encrypted session belong ONLY
+# in bridge/.env / its host secret manager; never in Sites frontend variables.
+
+===== FIN: .env.example =====
+
+
+===== ARCHIVO: .gitignore =====
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/.vinext/
+/out/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+next-env.d.ts
+
+# Maintained Vite plugin and worker sources.
+!/build/
+/build/*
+!/build/connector-preview-plugin.mjs
+!/build/connector-preview-worker.mjs
+!/build/sites-vite-plugin.LICENSE
+!/build/sites-vite-plugin.ts
+!/build/sites-worker.ts
+
+/dist/
+/.wrangler/
+# Checkout-local execution profile and tool state; never publish them.
+/.sites-runtime/
+/.agents/
+/.codex/
+/outputs/
+/work/
+
+!.env.example
+*.tsbuildinfo
+/test-results/
+/playwright-report/
+
+.dev.vars*
+/bridge/node_modules/
+/bridge/.bridge-state/
+/bridge/.env
+**/.netlify/
+/bridge/.env.netlify
+
+===== FIN: .gitignore =====
+
+
+===== ARCHIVO: .npmrc =====
+audit=false
+fund=false
+update-notifier=false
+
+===== FIN: .npmrc =====
+
+
+===== ARCHIVO: .openai/hosting.json =====
+{
+  "d1": "DB",
+  "r2": null,
+  "project_id": "REPLACE_WITH_YOUR_SITES_PROJECT_ID"
+}
+
+===== FIN: .openai/hosting.json =====
+
+
+===== ARCHIVO: LECTURA-PARA-IA.md =====
+# Copia de código para lectura
+
+Instantánea del proyecto Notas Escena 0.2.1, sin historial de Git, credenciales, sesión de Telegram, registros de participantes ni estado de ejecución.
+
+Esta copia contiene el código de interfaz, servidor, puente, pruebas y documentación. Los identificadores de hosting y las rutas del equipo se sustituyen por ejemplos. Se omiten las dos capturas de auditoría. Las variables de entorno son ejemplos vacíos; la integración real necesita una configuración privada propia.
+
+La autorización de participantes y la comprobación del titular se conservan sin cambios. Compartir esta copia no concede acceso a la aplicación publicada, Telegram, Netlify ni sus secretos.
+
+Consulta README.md para arquitectura y ejecución. Esta copia pública no contiene el historial privado del desarrollo y no crea un despliegue de producción.
+
+===== FIN: LECTURA-PARA-IA.md =====
+
+
+===== ARCHIVO: README.md =====
+# Código fuente público · Notas Escena 0.2.1
+
+Instantánea para lectura y revisión; no es acceso a una instalación de producción. No contiene credenciales, sesiones ni registros de titulares. Las referencias a comprobaciones históricas describen el desarrollo original y no acreditan una integración operativa al descargar esta copia.
+
+# Notas · Escena
+
+PWA privada de notas para iPhone, con artista autenticado y consultas autorizadas. El flujo completo funciona con fichas ficticias: prepara una sesión, crea una nota y escribe `600 000-001`. Tras una pausa de 800 ms comienza la consulta automáticamente. La respuesta se reserva en memoria y aparece como vista temporal bajo el texto solo mientras mantienes pulsados los eslabones. Al soltar se oculta; nunca modifica el contenido ni el historial de la nota.
+
+La integración real con @TrueCalleRobot se comprobó con el teléfono propio del titular mediante una sesión nueva de su cuenta de Telegram. El transporte entre bots sigue rechazado por Telegram; es una alternativa distinta. El [puente de cliente de usuario](bridge/README.md) no extrae sesiones existentes ni utiliza el servidor de Numeria. [Acta de comprobaciones](docs/ACTIVACION-TELEGRAM.md).
+
+El proveedor de Netlify está activo en https://your-notes-project.netlify.app/lookup y conserva las credenciales exclusivamente en Functions de producción. Una consulta real obtuvo respuesta correlacionada en 2100 ms con el puente y el túnel locales apagados; la repetición del mismo UUID fue rechazada sin nuevo envío. La web privada mantiene su dirección de Sites. [Configuración Netlify](bridge/NETLIFY.md).
+
+## Ejecución local
+
+Necesitas Node.js 24, npm y un navegador. Las pruebas del bloqueo de nube necesitan PostgreSQL 17; `POSTGRES_BIN` permite indicar su carpeta bin. Se usa un clúster temporal aislado. Autenticación local simulada exclusivamente en loopback; no usar el servidor de desarrollo como hosting público.
+
+```sh
+cd /path/to/notas-escena
+npm ci
+npm run build
+npm --prefix bridge ci --ignore-scripts
+npm run test:bridge
+npm run typecheck:bridge
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_bouncy_scalphunter.sql
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0001_robust_thunderball.sql
+npm run dev -- --port 5176 --hostname 127.0.0.1
+```
+
+Aplica cada migración una sola vez por base local. Abre `http://127.0.0.1:5176/`; el inicio de sesión de desarrollo lo proporciona la plantilla Sites. Si preparas más de cinco sesiones en una hora, se aplica el límite del servidor; para ensayos automatizados usa la base local descartable de las pruebas.
+
+No puede instalarse una PWA desde el localhost del ordenador en un iPhone remoto. Para usar un iPhone abre la dirección HTTPS publicada en Sites y autentícate con la cuenta propietaria.
+
+## Uso
+
+1. Menú superior de tres puntos → Área del artista.
+2. Mantén seleccionadas las fichas ficticias y pulsa Preparar sesión.
+3. Crea una nota con el botón de composición inferior.
+4. Escribe `600000001`, `+34 600 000 001` o `0034-600-000-001` (Alba Ejemplo). La otra ficha sintética es `700000002` (Leo Ensayo).
+5. Mantén pulsados los eslabones, a la derecha del lápiz circular: aparece el peek mientras sostienes el botón y se oculta al soltar. Si todavía está consultando, aparece al llegar solo si sigues manteniendo pulsado. Un toque breve no deja información visible. Puedes volver a mantener pulsado sin reenviar la consulta. En teclado, mantén Espacio o Intro sobre el botón.
+6. Deshacer descarta el resultado reservado conservando el texto escrito. Borrar sesión y resultados elimina los metadatos del servidor y las notas de actuación en memoria.
+
+Esos números son claves sintéticas: no se afirma que estén reservados ni que no correspondan a un abonado. El proveedor demo jamás los transmite fuera del servidor.
+
+El teléfono debe ser el único contenido numérico de la nota. Se admite texto descriptivo en otras líneas; fechas, extensiones, dos números y formatos ambiguos se rechazan. No se escoge un número silenciosamente. El texto escrito permanece intacto.
+
+La detección automática funciona solo con una sesión preparada y una ficha seleccionada. Cambiar el texto, la nota o la sesión invalida la respuesta pendiente o reservada. No se repite automáticamente la misma sesión/nota/número, ni tras un fallo o deshacer; mantener pulsado cuando falta un resultado inicia una consulta explícita. El peek puede verlo quien mire la pantalla mientras mantienes pulsado.
+
+Las notas ordinarias se guardan en este dispositivo. Durante una actuación, abrir una nota ordinaria crea una copia temporal para proteger el original. Al cerrar o recargar se pierden los resultados y las notas de actuación. No hay sincronización de notas entre dispositivos.
+
+## Conexión real comprobada
+
+El sitio privado está en modo real con el teléfono propio autorizado. El titular vinculó una sesión nueva de Telegram, cifrada en el servidor. El proveedor HTTPS se ejecuta en Netlify Functions con un registro transaccional Postgres para duplicados y límites. El puente y el túnel del Mac se apagaron antes de comprobar la consulta real desde Netlify: ya no son necesarios durante una actuación.
+
+Para usarlo en iPhone: abre tu dirección privada de Sites, autentícate, prepara la sesión en ese dispositivo y crea una nota nueva. Si pulsas los eslabones sin sesión, el área del artista se abre para prepararla. Telegram no tiene que estar abierto en el móvil. El titular confirmó en su iPhone el peek de mantener/soltar después de forzar el cierre para cargar la versión nueva. El agente no utilizó ese dispositivo; falta distinguir Safari/PWA instalada y completar los ensayos físicos ampliados.
+
+## PWA
+
+Manifiesto: `public/manifest.json`. Iconos PNG de 192, 512 y 180 px. En Safari: Compartir → Añadir a la pantalla de inicio. `public/sw.js` cachea solo iconos, manifiesto y pantalla estática sin conexión. Nunca cachea notas, API, respuestas, autenticación ni páginas de la app. Las consultas necesitan conexión y la app abierta; no se promete ejecución cuando iOS la suspenda o cierre.
+
+## Configuración del servidor
+
+El archivo `.env.example` contiene únicamente nombres y ejemplos sin credenciales. En Sites usa sus variables de entorno de servidor; para desarrollo Worker usa un `.dev.vars` ignorado. El modo por defecto es `demo`. No pongas secretos en variables `NEXT_PUBLIC_`, manifiestos o código.
+
+Para la integración compatible consulta [PROVEEDOR.md](docs/PROVEEDOR.md). Para arquitectura, privacidad y límites consulta [SEGURIDAD.md](docs/SEGURIDAD.md).
+
+## Verificación
+
+```sh
+npm run typecheck
+npm run typecheck:bridge
+npm test
+npm run test:bridge
+npm run test:browser
+npm run build
+```
+
+Las pruebas de navegador requieren la vista previa anterior en marcha y los navegadores Playwright (`npx playwright install chromium webkit`, si aún no están disponibles). `test:browser` borra **solo** sesiones, peticiones y límites en la base local de prueba, nunca usa una conexión D1 remota. El directorio `.wrangler/state` debe ser descartable durante estos ensayos.
+
+Consulta [PRUEBAS.md](docs/PRUEBAS.md) y [FIDELIDAD.md](docs/FIDELIDAD.md). Las pruebas WebKit con pantalla de iPhone son emulación; no acreditan teclado nativo, Safari físico o instalación real.
+
+## Estructura
+
+- `components/`: listado, editor, controles, artista y coordinación del flujo.
+- `lib/client/`: notas ordinarias, agrupación temporal y comunicación con API.
+- `lib/domain.ts`: normalización, correlación, validación y formato seguro.
+- `lib/server/`: autorización, sesiones, consultas, límites, proveedores y base.
+- `bridge/`: proceso Node independiente para Telegram con la cuenta autorizada; sus dependencias y comprobación de tipos son propias y no se incluyen en el Worker/frontend. Véase su README para vinculación y hosting.
+- `app/api/[...path]/route.ts`: frontera autenticada, CSRF, límites de cuerpo y errores seguros.
+- `db/schema.ts` y `drizzle/`: esquema y migración D1.
+- `proxy.ts`: CSP con nonce, cabeceras de seguridad y no-store.
+- `tests/`: pruebas unitarias, servidor y navegador.
+- `SPEC.md`: decisiones y criterios verificables.
+
+## Publicación
+
+El proyecto se publica privado en Sites; la plataforma gestiona inicio de sesión, cookies y cabeceras de identidad. El backend vuelve a comprobar pertenencia en cada operación. No expongas el Worker fuera de ese gateway: una instalación independiente necesita un proveedor de identidad real que sustituya la confianza en las cabeceras de Sites.
+
+El manifiesto `.openai/hosting.json` declara `DB` y la identidad del Site. Publicar una nueva versión requiere el flujo de empaquetado de Sites y aplica las migraciones incluidas. Los cambios de variables se aplican con un nuevo despliegue.
+
+## Auditoría 0.2.0 · 12 octubre 2026
+
+[Informe completo y límites](docs/auditoria-20261012/INFORME.md) y [matriz de recorridos](docs/auditoria-20261012/cobertura.csv). Crear y volver descarta notas vacías. Las modificaciones ordinarias se guardan inmediatamente; se conserva la búsqueda y posición al volver. Deslizar hacia la derecha ofrece fijar/desfijar; hacia la izquierda ofrece eliminar. También están las opciones del editor y las alternativas de teclado (flecha derecha/Supr sobre una fila, Escape para cerrar).
+
+Las notas ordinarias eliminadas pasan a Carpetas → Eliminadas recientemente, recuperables durante 30 días. El borrado definitivo requiere confirmación. Las notas de actuación se descartan y nunca se conservan en esa papelera. El límite es 200 notas activas y 400 incluyendo papelera, sujeto a la cuota del navegador. Cambios independientes de dos pestañas se combinan; un conflicto en la misma nota avisa y conserva el borrador visible para evitar sobrescribir el guardado. No hay colaboración ni sincronización remota.
+
+El Área del artista muestra la versión de la app. Los cambios ya comprobados localmente no implican que la versión publicada se haya actualizado; consulta el acta de publicación. La nueva cabecera, recuperación y teclado de búsqueda necesitan ensayo físico después de publicar.
+
+## Borrado 0.2.1
+
+Eliminar una copia de actuación también retira su original del listado: únicamente ese original ordinario es recuperable desde la papelera. Las copias temporales se descartan. Se corrige la activación por toque y el click posterior que podía reabrir una nota. [Reproducción y verificación](docs/BORRADO-0.2.1.md).
+
+===== FIN: README.md =====
+
+
+===== ARCHIVO: SPEC.md =====
+# Notas · Escena — contrato verificable
+
+11 octubre 2026. Proyecto independiente; no altera otros proyectos. Referencias visuales: IMG_5357, IMG_5358, IMG_5360, analizadas como imágenes y sin copiar sus datos.
+
+## Arquitectura y decisiones
+
+- TypeScript, React y Vinext; frontend de notas separado del servicio de sesión y del proveedor. Despliegue privado en Sites, identidad de ChatGPT gestionada por la plataforma; simulación de autenticación SOLO en desarrollo local.
+- D1 para sesiones, límites y metadatos de peticiones; ninguna respuesta ni nombre del proveedor se guarda en la base. Las notas ordinarias se guardan en el dispositivo; notas de actuación y resultados únicamente en memoria. La API no devuelve datos mediante cachés.
+- Editor contenteditable de texto plano y primera línea destacada. Selección y entrada nativas; historial de deshacer acotado y por nota para evitar diferencias de agrupación entre navegadores. Barra ajustada a VisualViewport y safe areas, sin teclado ni estado de sistema falsos.
+- Sesión de dos horas, lista cerrada de participantes, una consulta pendiente por sesión, diez consultas por sesión y veinte por artista/hora. Por petición posterior del usuario (12/10/2026), detectar un único móvil autorizado inicia la consulta tras 800 ms sin cambios, incluso antes de pulsar los eslabones. No se consulta por cada pulsación; incompletos, ambiguos y fichas no seleccionadas no inician solicitudes. Sin reintentos automáticos del proveedor.
+- La respuesta válida se reserva únicamente en memoria con su contexto exacto y el estado «recibido». Por petición posterior del usuario, mantener pulsados los eslabones la muestra temporalmente sin modificar el texto ni el historial de la nota; soltar, cancelar el gesto o dejar de ver la app la oculta. Se puede repetir sin consultar nuevamente; una edición, cambio de nota o sesión la descarta. Cada sesión/nota/número se consulta automáticamente una vez; un reintento posterior requiere acción explícita. Deshacer no vuelve a consultar. Este flujo sustituye la consulta exclusivamente al pulsar del contrato inicial.
+- Identificadores UUID, hash de revisión, número normalizado y sesión vinculan cada petición. Toda edición/cambio de nota/reinicio invalida la visualización pendiente. Respuestas como texto literal, nunca HTML.
+- Demostración: dos fichas inventadas; únicamente se consulta el almacén ficticio local del servidor, nunca Telegram. Los números son claves sintéticas del juego, no se afirma que sean números reservados.
+- Real: adaptador HTTP de API autorizada o transporte Telegram mediante un bot propio dedicado. El transporte directo está implementado, pero permanece desactivado hasta configurar token, ID numérico del destino, permisos y protocolo de respuesta confirmado. D1 serializa globalmente por bot; las respuestas requieren origen/conversación fijos, reply al mensaje enviado, teléfono coincidente y marcador final. No hay webhooks de entrada.
+- El 12/10/2026 el usuario pidió explícitamente el enfoque de cuenta de usuario que sugiere Numeria, sustituyendo su prohibición inicial de automatizar la cuenta. Se añade un proceso Node MTProto propio, detrás del adaptador HTTP, con autenticación nueva autorizada, sesión cifrada, teléfono de getMe, destino fijo, ledger SQLite durable y sin reintentos. Es un proyecto Node con dependencias y tipos separados del Worker. No se extrae una sesión de Telegram Web/móvil. [Contrato del puente](bridge/SPEC.md). Se ha vinculado la cuenta y comprobado envío/recepción del teléfono propio; el proveedor se ejecuta en Netlify Functions con Postgres compartido, comprobado con el puente y túnel del Mac apagados. El titular confirmó también mantener/soltar en su iPhone tras forzar el cierre para cargar la nueva versión; es una prueba física reportada por él, no realizada por el agente.
+
+## Criterios
+
+Crear/editar/buscar/fijar/eliminar; agrupaciones por calendario Europe/Andorra; conteo real; flujo completo demo y deshacer. Normalizar +34/0034/9 dígitos con espacios/guiones y rechazar ambigüedad. Bloquear terceros en servidor. Duplicados y resultados obsoletos no insertan. Sin persistencia de resultados, sin secretos frontend. Límites y CSRF; accesibilidad y movimiento reducido. PWA con manifiesto e iconos; caché exclusivamente de recursos públicos estáticos.
+
+## Pendiente de acceso
+
+Existe un bot propio con token en el servidor e ID de destino confirmado; no existe contrato ni permiso del proveedor @TrueCalleRobot. La prueba de saludo privado entre bots fue rechazada por Telegram; se ha solicitado compatibilidad al contacto del servicio. Su página pública se presenta como Truecaller; no acredita afiliación, API o bot-to-bot. Telegram Bot API 10.0 permite bots si ambos lo habilitan (documentación consultada 11/10/2026). La vía de cuenta de usuario se ha probado separadamente con la autorización/titularidad del teléfono propio y protocolo correlacionado; no acredita comunicación entre bots ni permiso comercial del servicio. Safari/iPhone/PWA real se declara probado SOLO con dispositivo disponible.
+
+Fuentes: https://core.telegram.org/bots/api ; https://core.telegram.org/bots/faq ; https://t.me/TrueCalleRobot .
+
+## Ampliación 0.2.0: auditoría de eficiencia y experiencia
+
+Guardar cada cambio ordinario antes de volver/recargar; descartar borrador vacío; conservar búsqueda, fijadas plegadas y desplazamiento; cerrar menús con Escape/afuera y sus disparadores; admitir Atrás del navegador con validación del contexto. Borrado ordinario recuperable, retención local de 30 días al cargar, confirmación de eliminación definitiva y gestos para fijar/eliminar. La actuación nunca pasa a papelera persistente. Cambios independientes entre pestañas se combinan y los conflictos detectados en la misma nota se detienen con aviso, sin prometer transacciones/colaboración. Formateadores de calendario reutilizados; fechas acotadas, IDs deduplicados; teclado/zoom compartidos por listado/editor. [Evidencia de auditoría](docs/auditoria-20261012/INFORME.md).
+
+===== FIN: SPEC.md =====
+
+
+===== ARCHIVO: app/api/[...path]/route.ts =====
+import { env } from "cloudflare:workers";
+import { getChatGPTUser } from "../../chatgpt-auth";
+import { Service } from "../../../lib/server/service";
+import { Store } from "../../../lib/server/store";
+import {
+  participants,
+  isProviderConfigured,
+  type ProviderConfig,
+} from "../../../lib/server/providers";
+import { AppError } from "../../../lib/domain";
+import { TelegramProvider } from "../../../lib/server/telegram";
+export const dynamic = "force-dynamic";
+const headers = {
+  "Content-Type": "application/json; charset=utf-8",
+  "Cache-Control": "no-store, private",
+  Vary: "Cookie",
+  "X-Content-Type-Options": "nosniff",
+};
+async function handle(request: Request) {
+  try {
+    const user = await getChatGPTUser();
+    if (!user) throw new AppError("AUTH", "Inicia sesión como artista.", 401);
+    const config = env as unknown as ProviderConfig;
+    const url = new URL(request.url),
+      path = url.pathname;
+    if (request.method === "GET" && path === "/api/config")
+      return Response.json(
+        {
+          mode: config.PROVIDER_MODE ?? "demo",
+          transport:
+            config.PROVIDER_MODE === "real"
+              ? (config.PROVIDER_TRANSPORT ?? "http")
+              : "demo",
+          artist: user.displayName,
+          artistId: user.userId,
+          participants: participants(config, user.userId),
+          realConfigured: isProviderConfigured(
+            config,
+            env.DB ? new Store(env.DB) : undefined,
+          ),
+        },
+        { headers },
+      );
+    if (!env.DB)
+      throw new AppError(
+        "DATABASE",
+        "La base de sesiones no está disponible.",
+        503,
+      );
+    const service = new Service(new Store(env.DB), config);
+    if (request.method === "GET" && path === "/api/provider-check") {
+      if (!(service.provider instanceof TelegramProvider))
+        throw new AppError(
+          "PROVIDER_CONFIG",
+          "No hay transporte Telegram configurado.",
+          409,
+        );
+      await service.rate(user.userId, "provider-check", 5);
+      return Response.json(
+        await service.provider.check(AbortSignal.timeout(8000)),
+        { headers },
+      );
+    }
+    if (request.method === "GET" && path === "/api/diagnostics")
+      return Response.json(
+        await service.diagnostics(
+          user.userId,
+          url.searchParams.get("sessionId") ?? "",
+          request.headers.get("x-csrf-token"),
+        ),
+        { headers },
+      );
+    if (request.method !== "POST")
+      throw new AppError("METHOD", "Ruta no disponible.", 404);
+    if (
+      request.headers.get("origin") !== url.origin ||
+      request.headers.get("sec-fetch-site") === "cross-site"
+    )
+      throw new AppError("ORIGIN", "Origen no permitido.", 403);
+    if (!request.headers.get("content-type")?.startsWith("application/json"))
+      throw new AppError("CONTENT_TYPE", "Usa JSON.", 415);
+    if (Number(request.headers.get("content-length")) > 32768)
+      throw new AppError("TOO_LARGE", "Petición demasiado grande.", 413);
+    // Stream limit before parsing, including requests without Content-Length.
+    const reader = request.body?.getReader();
+    if (!reader) throw new AppError("INPUT", "Falta cuerpo JSON.");
+    let size = 0,
+      content = "";
+    const decoder = new TextDecoder();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 32768) {
+        await reader.cancel();
+        throw new AppError("TOO_LARGE", "Petición demasiado grande.", 413);
+      }
+      content += decoder.decode(value, { stream: true });
+    }
+    content += decoder.decode();
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(content);
+    } catch {
+      throw new AppError("INPUT", "JSON no válido.");
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body))
+      throw new AppError("INPUT", "Petición no válida.");
+    if (path === "/api/session")
+      return Response.json(await service.start(user.userId, body), { headers });
+    if (path === "/api/erase") {
+      await service.erase(user.userId);
+      return Response.json({ ok: true }, { headers });
+    }
+    if (path === "/api/query")
+      return Response.json(
+        await service.query(
+          user.userId,
+          body,
+          request.headers.get("x-csrf-token"),
+        ),
+        { headers },
+      );
+    throw new AppError("NOT_FOUND", "Ruta no disponible.", 404);
+  } catch (error) {
+    const e =
+      error instanceof AppError
+        ? error
+        : new AppError(
+            "INTERNAL",
+            "Error interno. Vuelve a intentarlo desde el área del artista.",
+            500,
+          );
+    // Log only a fixed error code. Never log exceptions from an external service.
+    if (e.status >= 500) console.error(JSON.stringify({ code: e.code }));
+    return Response.json(
+      { error: e.message, code: e.code },
+      { status: e.status, headers },
+    );
+  }
+}
+export const GET = handle;
+export const POST = handle;
+
+===== FIN: app/api/[...path]/route.ts =====
+
+
+===== ARCHIVO: app/chatgpt-auth.ts =====
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+
+export type ChatGPTUser = {
+  userId: string;
+  displayName: string;
+  email: string;
+  fullName: string | null;
+};
+
+const USER_ID_HEADER = "oai-authenticated-user-id";
+const USER_EMAIL_HEADER = "oai-authenticated-user-email";
+const USER_FULL_NAME_HEADER = "oai-authenticated-user-full-name";
+const USER_FULL_NAME_ENCODING_HEADER =
+  "oai-authenticated-user-full-name-encoding";
+const PERCENT_ENCODED_UTF8 = "percent-encoded-utf-8";
+const SIGN_IN_PATH = "/signin-with-chatgpt";
+const SIGN_OUT_PATH = "/signout-with-chatgpt";
+const CALLBACK_PATH = "/callback";
+
+export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
+  const requestHeaders = await headers();
+  const userId = requestHeaders.get(USER_ID_HEADER);
+  const email = requestHeaders.get(USER_EMAIL_HEADER);
+  if (!userId || !email) return null;
+
+  const encodedFullName = requestHeaders.get(USER_FULL_NAME_HEADER);
+  const fullName =
+    encodedFullName &&
+    requestHeaders.get(USER_FULL_NAME_ENCODING_HEADER) === PERCENT_ENCODED_UTF8
+      ? safeDecodeURIComponent(encodedFullName)
+      : null;
+
+  return {
+    userId,
+    displayName: fullName ?? email,
+    email,
+    fullName,
+  };
+}
+
+export async function requireChatGPTUser(
+  returnTo: string,
+): Promise<ChatGPTUser> {
+  const user = await getChatGPTUser();
+  if (user) return user;
+
+  redirect(chatGPTSignInPath(returnTo));
+}
+
+export function chatGPTSignInPath(returnTo: string): string {
+  const safeReturnTo = safeRelativeReturnPath(returnTo);
+  return `${SIGN_IN_PATH}?return_to=${encodeURIComponent(safeReturnTo)}`;
+}
+
+export function chatGPTSignOutPath(returnTo = "/"): string {
+  const safeReturnTo = safeRelativeReturnPath(returnTo);
+  return `${SIGN_OUT_PATH}?return_to=${encodeURIComponent(safeReturnTo)}`;
+}
+
+function safeRelativeReturnPath(value: string): string {
+  if (!value.startsWith("/") || value.startsWith("//")) return "/";
+
+  let url: URL;
+  try {
+    url = new URL(value, "https://app.local");
+  } catch {
+    return "/";
+  }
+  if (url.origin !== "https://app.local") return "/";
+  if (isReservedAuthPath(url.pathname)) return "/";
+
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function isReservedAuthPath(pathname: string): boolean {
+  return (
+    pathname === SIGN_IN_PATH ||
+    pathname === SIGN_OUT_PATH ||
+    pathname === CALLBACK_PATH
+  );
+}
+
+function safeDecodeURIComponent(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
+===== FIN: app/chatgpt-auth.ts =====
+
+
+===== ARCHIVO: app/globals.css =====
+:root {
+  --paper: #fff;
+  --canvas: #f2f2f6;
+  --ink: #111;
+  --muted: #6e6e73;
+  --line: #e4e4e8;
+  --accent: #e5b400;
+  --keyboard-inset: 0px;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  color: var(--ink);
+  background: var(--canvas);
+  font-synthesis: none;
+  color-scheme: light;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+button,
+input {
+  font: inherit;
+}
+button {
+  cursor: pointer;
+  border: 0;
+  background: none;
+  color: inherit;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button:focus-visible,
+input:focus-visible,
+[contenteditable]:focus-visible {
+  outline: 2px solid #967600;
+  outline-offset: 3px;
+}
+svg {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+button svg {
+  display: block;
+}
+input {
+  min-width: 0;
+}
+a {
+  color: #806200;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.app-shell {
+  width: 100%;
+  min-height: 100dvh;
+  background: var(--canvas);
+  margin: auto;
+  position: rel

@@ -1,0 +1,304 @@
+ARCHIVO ORIGINAL: lib/server/providers.ts
+
+import { AppError, validateResult, type QueryResult } from "../domain.ts";
+import { TelegramProvider } from "./telegram.ts";
+import type { Store } from "./store.ts";
+export type ProviderInput = {
+  requestId: string;
+  phone: string;
+  sessionId: string;
+  signal: AbortSignal;
+};
+export interface Provider {
+  mode: "demo" | "real";
+  lookup(input: ProviderInput): Promise<QueryResult>;
+}
+export const DEMO_PARTICIPANTS = [
+  {
+    id: "demo-alba",
+    label: "Alba Ejemplo · ficha ficticia",
+    phone: "+34600000001",
+  },
+  {
+    id: "demo-leo",
+    label: "Leo Ensayo · ficha ficticia",
+    phone: "+34700000002",
+  },
+];
+export class DemoProvider implements Provider {
+  mode = "demo" as const;
+  async lookup({
+    requestId,
+    phone,
+    signal,
+  }: ProviderInput): Promise<QueryResult> {
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => {
+        clearTimeout(timer);
+        reject(new AppError("TIMEOUT", "Tiempo agotado.", 504));
+      };
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", abort);
+        resolve();
+      }, 600);
+      if (signal.aborted) abort();
+      else signal.addEventListener("abort", abort, { once: true });
+    });
+    const person = DEMO_PARTICIPANTS.find((p) => p.phone === phone);
+    return validateResult(
+      {
+        requestId,
+        phone,
+        final: true,
+        found: !!person,
+        ...(person
+          ? {
+              country: "España",
+              carrier: "Operador de demostración",
+              name:
+                phone === DEMO_PARTICIPANTS[0].phone
+                  ? "Alba Ejemplo"
+                  : "Leo Ensayo",
+            }
+          : {}),
+      },
+      requestId,
+      phone,
+    );
+  }
+}
+export type ProviderConfig = {
+  PROVIDER_MODE?: string;
+  PROVIDER_API_URL?: string;
+  PROVIDER_API_TOKEN?: string;
+  PROVIDER_AUTHORIZED?: string;
+  AUTHORIZED_PARTICIPANTS_JSON?: string;
+  PROVIDER_TRANSPORT?: string;
+  TELEGRAM_BOT_TOKEN?: string;
+  TELEGRAM_TARGET_BOT_ID?: string;
+  TELEGRAM_TARGET_USERNAME?: string;
+  TELEGRAM_PROTOCOL_CONFIRMED?: string;
+  TELEGRAM_FINAL_SUFFIX?: string;
+  TELEGRAM_NO_RESULT_TEXT?: string;
+};
+export class HttpProvider implements Provider {
+  mode = "real" as const;
+  config: ProviderConfig;
+  constructor(config: ProviderConfig) {
+    this.config = config;
+    let url: URL;
+    try {
+      url = new URL(config.PROVIDER_API_URL!);
+    } catch {
+      throw new AppError(
+        "PROVIDER_CONFIG",
+        "Falta URL de API autorizada.",
+        503,
+      );
+    }
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      !config.PROVIDER_API_TOKEN ||
+      config.PROVIDER_AUTHORIZED !== "true"
+    )
+      throw new AppError(
+        "PROVIDER_CONFIG",
+        "Faltan configuración o permisos del proveedor.",
+        503,
+      );
+  }
+  async lookup({
+    requestId,
+    phone,
+    sessionId,
+    signal,
+  }: ProviderInput): Promise<QueryResult> {
+    // Never retry: a failed delivery may have reached the external service already.
+    let res: Response;
+    try {
+      res = await fetch(this.config.PROVIDER_API_URL!, {
+        method: "POST",
+        redirect: "manual",
+        signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.PROVIDER_API_TOKEN}`,
+          "Idempotency-Key": requestId,
+        },
+        body: JSON.stringify({ requestId, phone, sessionId }),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      const reason = /redirect/i.test(message)
+        ? "REDIRECT"
+        : /dns|resolve|hostname/i.test(message)
+          ? "DNS"
+          : /certificate|tls|ssl/i.test(message)
+            ? "TLS"
+            : /different request|I\/O|context/i.test(message)
+              ? "CONTEXT"
+              : /header|character|invalid.*value/i.test(message)
+                ? "HEADER"
+                : /disallow|denied|forbidden|blocked/i.test(message)
+                  ? "BLOCKED"
+                  : /connection|socket|network/i.test(message)
+                    ? "CONNECTION"
+                    : /abort/i.test(message)
+                      ? "ABORTED"
+                      : "UNKNOWN";
+      throw new AppError(
+        `PROVIDER_NETWORK_${reason}`,
+        "No se pudo contactar con el puente HTTPS.",
+        502,
+      );
+    }
+    if (res.status >= 300 && res.status < 400) {
+      let hostname = "destino desconocido";
+      try {
+        const destination = new URL(
+          res.headers.get("location") ?? "",
+          this.config.PROVIDER_API_URL,
+        );
+        if (/^[a-z0-9.-]{1,150}$/i.test(destination.hostname))
+          hostname = destination.hostname;
+      } catch {
+        /* Never expose an untrusted Location or its query string. */
+      }
+      throw new AppError(
+        "PROVIDER_REDIRECT",
+        `El puente HTTPS redirige (${res.status}) a ${hostname}. No se reenviaron credenciales ni teléfono.`,
+        502,
+      );
+    }
+    if (res.status === 429)
+      throw new AppError(
+        "PROVIDER_RATE_LIMIT",
+        "El proveedor limita las consultas; espera antes de iniciar otra.",
+        429,
+      );
+    if (!res.ok)
+      throw new AppError(
+        "PROVIDER_ERROR",
+        "El proveedor no pudo completar la consulta.",
+        502,
+      );
+    if (!res.headers.get("content-type")?.includes("application/json"))
+      throw new AppError(
+        "INVALID_RESULT",
+        "El proveedor no devuelve JSON.",
+        502,
+      );
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let content = "";
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 8192) {
+        await reader.cancel();
+        throw new AppError("INVALID_RESULT", "Respuesta excesiva.", 502);
+      }
+      content += decoder.decode(value, { stream: true });
+    }
+    content += decoder.decode();
+    let value: unknown;
+    try {
+      value = JSON.parse(content);
+    } catch {
+      throw new AppError("INVALID_RESULT", "JSON no válido.", 502);
+    }
+    return validateResult(value, requestId, phone);
+  }
+}
+export function createProvider(
+  config: ProviderConfig,
+  store?: Store,
+): Provider {
+  if (!config.PROVIDER_MODE || config.PROVIDER_MODE === "demo")
+    return new DemoProvider();
+  if (config.PROVIDER_MODE === "real") {
+    if (config.PROVIDER_TRANSPORT === "telegram") {
+      if (!store)
+        throw new AppError(
+          "PROVIDER_CONFIG",
+          "Falta almacenamiento de correlación de Telegram.",
+          503,
+        );
+      return new TelegramProvider(config, store);
+    }
+    if (!config.PROVIDER_TRANSPORT || config.PROVIDER_TRANSPORT === "http")
+      return new HttpProvider(config);
+  }
+  throw new AppError("PROVIDER_CONFIG", "Modo de proveedor desconocido.", 503);
+}
+export type Grant = {
+  id: string;
+  label: string;
+  phone: string;
+  artistId: string;
+  consentRef: string;
+  ownershipVerifiedAt: string;
+  expiresAt: string;
+  scope: "lookup";
+  provider: string;
+};
+export function participants(config: ProviderConfig, userId: string) {
+  if (!config.PROVIDER_MODE || config.PROVIDER_MODE === "demo")
+    return DEMO_PARTICIPANTS;
+  let grants: unknown;
+  try {
+    grants = JSON.parse(config.AUTHORIZED_PARTICIPANTS_JSON ?? "[]");
+  } catch {
+    throw new AppError(
+      "GRANT_CONFIG",
+      "Registro de autorizaciones no válido.",
+      503,
+    );
+  }
+  if (!Array.isArray(grants) || grants.length > 100)
+    throw new AppError(
+      "GRANT_CONFIG",
+      "Registro de autorizaciones no válido.",
+      503,
+    );
+  return (grants as Grant[])
+    .filter(
+      (g) =>
+        g &&
+        g.artistId === userId &&
+        g.scope === "lookup" &&
+        typeof g.id === "string" &&
+        /^[a-z0-9-]{1,64}$/.test(g.id) &&
+        typeof g.label === "string" &&
+        g.label.length <= 100 &&
+        /^\+34[67]\d{8}$/.test(g.phone) &&
+        typeof g.consentRef === "string" &&
+        g.consentRef.length >= 8 &&
+        Number.isFinite(Date.parse(g.ownershipVerifiedAt)) &&
+        Date.parse(g.ownershipVerifiedAt) <= Date.now() &&
+        Date.parse(g.expiresAt) > Date.now() &&
+        g.provider === providerIdentity(config),
+    )
+    .map(({ id, label, phone }) => ({ id, label, phone }));
+}
+export function providerIdentity(config: ProviderConfig): string | undefined {
+  return config.PROVIDER_TRANSPORT === "telegram"
+    ? `telegram:@${config.TELEGRAM_TARGET_USERNAME}:${config.TELEGRAM_TARGET_BOT_ID}`
+    : config.PROVIDER_API_URL;
+}
+export function isProviderConfigured(
+  config: ProviderConfig,
+  store?: Store,
+): boolean {
+  if (config.PROVIDER_MODE !== "real") return false;
+  try {
+    createProvider(config, store);
+    return true;
+  } catch {
+    return false;
+  }
+}

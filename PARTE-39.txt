@@ -1,0 +1,836 @@
+log(
+  `Checked ${files} client files: no provider secrets or server registry markers.`,
+);
+
+===== FIN: scripts/verify-client.mjs =====
+
+
+===== ARCHIVO: tests/audit/baseline.spec.ts =====
+import { test, expect } from "playwright/test";
+import { writeFileSync } from "node:fs";
+import { prepare, fixtures } from "./fixtures";
+test("B01: métricas y capturas de listado/editor con paquete de producción", async ({
+  page,
+  browserName,
+}, info) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.addInitScript(() => {
+    const measurements = { lcp: 0, cls: 0, longTasks: [] as number[] };
+    Object.defineProperty(window, "auditMeasurements", { value: measurements });
+    for (const kind of [
+      "largest-contentful-paint",
+      "layout-shift",
+      "longtask",
+    ]) {
+      if (!PerformanceObserver.supportedEntryTypes.includes(kind)) continue;
+      new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          if (kind === "largest-contentful-paint")
+            measurements.lcp = e.startTime;
+          else if (kind === "longtask") measurements.longTasks.push(e.duration);
+          else if (
+            !(e as PerformanceEntry & { hadRecentInput: boolean })
+              .hadRecentInput
+          )
+            measurements.cls += (
+              e as PerformanceEntry & { value: number }
+            ).value;
+        }
+      }).observe({ type: kind, buffered: true });
+    }
+  });
+  await prepare(page, fixtures(200, 1000));
+  await page.screenshot({
+    path: info.outputPath("list.png"),
+    fullPage: false,
+    scale: "css",
+  });
+  const layout = await page.evaluate(() => ({
+    width: innerWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+    controls: [...document.querySelectorAll("button,input")]
+      .filter((e) => e.getBoundingClientRect().width > 0)
+      .map((e) => ({
+        label: e.getAttribute("aria-label"),
+        width: e.getBoundingClientRect().width,
+        height: e.getBoundingClientRect().height,
+      })),
+    navigation: performance
+      .getEntriesByType("navigation")
+      .map((e) => ({
+        ttfb: (e as PerformanceNavigationTiming).responseStart,
+        duration: e.duration,
+      })),
+    resources: performance
+      .getEntriesByType("resource")
+      .map((e) => ({
+        type: (e as PerformanceResourceTiming).initiatorType,
+        size: (e as PerformanceResourceTiming).decodedBodySize,
+        duration: e.duration,
+      })),
+  }));
+  expect(layout.scrollWidth).toBeLessThanOrEqual(layout.width);
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  // At the maximum the control should refuse; use an existing note for typing.
+  if (
+    await page.getByRole("heading", { name: "Notas", exact: true }).isVisible()
+  )
+    await page.locator(".note-row").first().click();
+  const text = page.getByRole("textbox", { name: "Texto de la nota" });
+  await text.press("ControlOrMeta+End");
+  let cdp;
+  if (browserName === "chromium") {
+    cdp = await page.context().newCDPSession(page);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+  }
+  const paints: number[] = [];
+  for (let i = 0; i < 20; i++) {
+    const began = performance.now();
+    await page.keyboard.insertText("a");
+    await page.evaluate(
+      () =>
+        new Promise<void>((r) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => r())),
+        ),
+    );
+    paints.push(performance.now() - began);
+  }
+  if (cdp) await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+  await page.screenshot({
+    path: info.outputPath("editor.png"),
+    fullPage: false,
+    scale: "css",
+  });
+  const observed = await page.evaluate(() => ({
+    measurement: (window as typeof window & { auditMeasurements: unknown })
+      .auditMeasurements,
+    elementCount: document.querySelectorAll("*").length,
+    viewport: {
+      height: visualViewport?.height,
+      offset: visualViewport?.offsetTop,
+    },
+    storedBytes:
+      (localStorage.getItem("notas-escena.ordinary.v1")?.length ?? 0) * 2,
+  }));
+  writeFileSync(
+    info.outputPath("metrics.json"),
+    JSON.stringify(
+      {
+        environment: "loopback production build; synthetic fixtures",
+        browserName,
+        project: info.project.name,
+        cpu:
+          browserName === "chromium"
+            ? "4x for typing"
+            : "no CPU throttle available",
+        layout,
+        observed,
+        typingRoundtripDoubleRafMs: paints,
+        errors,
+      },
+      null,
+      2,
+    ),
+  );
+  expect(errors).toEqual([]);
+});
+
+===== FIN: tests/audit/baseline.spec.ts =====
+
+
+===== ARCHIVO: tests/audit/complete.spec.ts =====
+import { test, expect } from "playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+import { prepare, fixtures, key } from "./fixtures";
+
+test("U01: listado, editor, opciones, artista y carpetas sin infracciones automáticas WCAG A/AA", async ({
+  page,
+}) => {
+  await prepare(page);
+  const check = async () => {
+    const result = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+      .analyze();
+    expect(
+      result.violations.map((v) => ({
+        id: v.id,
+        nodes: v.nodes.map((n) => n.target),
+      })),
+    ).toEqual([]);
+  };
+  await check();
+  await page.locator(".note-row").first().click();
+  await check();
+  await page.getByRole("button", { name: "Opciones de nota" }).click();
+  await check();
+  await page
+    .getByRole("button", { name: "Área del artista", exact: true })
+    .click();
+  await check();
+  await page.getByRole("button", { name: "Volver" }).click();
+  await page.getByRole("button", { name: "Volver a las notas" }).click();
+  await page.getByRole("button", { name: "Carpetas", exact: true }).click();
+  await check();
+  await page.getByRole("button", { name: /Eliminadas recientemente/ }).click();
+  await check();
+});
+test("U02: deslizar fija y elimina sin abrir la nota; recuperar y cancelación de borrado definitivo", async ({
+  page,
+}) => {
+  await prepare(page);
+  const row = page.locator(".note-row").filter({ hasText: "Ensayo 6" });
+  const box = (await row.boundingBox())!;
+  await row.dispatchEvent("pointerdown", {
+    pointerId: 1,
+    pointerType: "touch",
+    clientX: box.x + 20,
+    clientY: box.y + 20,
+  });
+  await row.dispatchEvent("pointermove", {
+    pointerId: 1,
+    pointerType: "touch",
+    clientX: box.x + 90,
+    clientY: box.y + 20,
+  });
+  await row.dispatchEvent("pointerup", { pointerId: 1, pointerType: "touch" });
+  await page
+    .getByRole("button", { name: "Fijar Ensayo 6", exact: true })
+    .click();
+  await expect(page.locator(".note-section").first()).toContainText("Ensayo 6");
+  await row.focus();
+  await page.keyboard.press("Delete");
+  await page
+    .getByRole("button", { name: "Eliminar Ensayo 6", exact: true })
+    .click();
+  await expect(page.locator(".note-row")).toHaveCount(7);
+  await page.getByRole("button", { name: "Carpetas", exact: true }).click();
+  await page.getByRole("button", { name: /Eliminadas recientemente/ }).click();
+  await page
+    .getByRole("button", {
+      name: "Eliminar definitivamente Ensayo 6",
+      exact: true,
+    })
+    .click();
+  await page.getByRole("button", { name: "Cancelar", exact: true }).click();
+  await expect(page.getByText("Ensayo 6", { exact: true })).toBeVisible();
+  await page
+    .getByRole("button", { name: "Recuperar Ensayo 6", exact: true })
+    .click();
+  await expect(page.getByText("No hay notas eliminadas.")).toBeVisible();
+});
+test("U03: escritura multilínea, selección, deshacer/rehacer y guardado exacto", async ({
+  page,
+}) => {
+  await prepare(page);
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  const area = page.getByRole("textbox", { name: "Texto de la nota" });
+  await area.fill("Título imaginario\nSegunda línea");
+  await area.press("ControlOrMeta+End");
+  await page.keyboard.insertText(" final");
+  await area.press("ControlOrMeta+z");
+  await expect(area).toHaveText("Título imaginario\nSegunda línea", {
+    useInnerText: true,
+  });
+  await area.press("ControlOrMeta+Shift+z");
+  await expect(area).toHaveText("Título imaginario\nSegunda línea final", {
+    useInnerText: true,
+  });
+  await page.getByRole("button", { name: "Volver a las notas" }).click();
+  await page.reload();
+  await page.getByRole("button", { name: /Título imaginario/ }).click();
+  await expect(area).toHaveText("Título imaginario\nSegunda línea final", {
+    useInnerText: true,
+  });
+});
+test("U04: búsquedas, plegado y desplazamiento se conservan; menú se cierra al tocar fuera", async ({
+  page,
+}) => {
+  await prepare(page, fixtures(40));
+  await page.getByRole("button", { name: "Ocultar fijadas" }).click();
+  await expect(page.locator(".note-row")).toHaveCount(37);
+  await page.locator(".note-row").last().scrollIntoViewIfNeeded();
+  const before = await page.evaluate(() => scrollY);
+  await page.locator(".note-row").last().click();
+  await page.getByRole("button", { name: "Opciones de nota" }).click();
+  await page.getByRole("textbox", { name: "Texto de la nota" }).click();
+  await expect(page.locator(".note-menu")).toHaveCount(0);
+  await page.getByRole("button", { name: "Volver a las notas" }).click();
+  await expect(page.locator(".note-row")).toHaveCount(37);
+  await expect
+    .poll(() => page.evaluate(() => scrollY))
+    .toBeGreaterThan(before - 10);
+});
+test("U05: fechas extremas, duplicados y HTML no rompen el listado ni ejecutan contenido", async ({
+  page,
+}) => {
+  const notes = fixtures();
+  notes[0].text =
+    "<script>window.compromised=true</script>\n<img src=x onerror=alert(1)>";
+  await prepare(page, [
+    ...notes,
+    { ...notes[1] },
+    { ...notes[2], id: "bad", updated: 1e100 },
+  ]);
+  await expect(page.locator(".note-row")).toHaveCount(8);
+  expect(await page.evaluate(() => "compromised" in window)).toBe(false);
+  await page.locator(".note-row").filter({ hasText: "<script>" }).click();
+  await expect(page.getByRole("textbox")).toContainText("<script>");
+  await expect(
+    page.locator(".writing-area script,.writing-area img"),
+  ).toHaveCount(0);
+});
+test("U06: límites, errores de almacenamiento y móvil sin conexión se explican", async ({
+  page,
+}) => {
+  await prepare(page, fixtures(200));
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  await expect(page.getByRole("alert")).toContainText("Límite de 200");
+  await page.getByRole("button", { name: "Cerrar aviso" }).click();
+  await page.locator(".note-row").first().click();
+  await page.evaluate(() => {
+    Storage.prototype.setItem = function () {
+      throw new DOMException("Audit quota", "QuotaExceededError");
+    };
+  });
+  await page
+    .getByRole("textbox", { name: "Texto de la nota" })
+    .fill("Una edición ficticia");
+  await expect(page.getByRole("alert")).toContainText("No se pudieron guardar");
+  await page.context().setOffline(true);
+  await page
+    .getByRole("button", { name: /Eslabones:/ })
+    .dispatchEvent("pointerdown", { isPrimary: true, button: 0, pointerId: 1 });
+  await expect(
+    page.getByRole("heading", { name: "Área del artista", exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate((k) => localStorage.getItem(k), key),
+  ).not.toContain("Una edición ficticia");
+});
+
+test("U07: herramientas mantienen el foco, adjunto de texto seguro y cierre del formato", async ({
+  page,
+}) => {
+  await prepare(page);
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  const area = page.getByRole("textbox", { name: "Texto de la nota" });
+  await area.fill("Título ficticio\n");
+  await area.press("ControlOrMeta+End");
+  await page.getByRole("button", { name: "Añadir elemento de lista" }).click();
+  await expect(area).toContainText("☐ ");
+  expect(await area.evaluate((el) => el === document.activeElement)).toBe(true);
+  await page.getByRole("button", { name: "Insertar tabla de texto" }).click();
+  await expect(area).toContainText("Columna A | Columna B");
+  await page.getByRole("button", { name: "Opciones de texto" }).click();
+  await expect(page.locator(".format-menu")).toBeVisible();
+  await page.getByRole("button", { name: "Opciones de texto" }).click();
+  await expect(page.locator(".format-menu")).toHaveCount(0);
+  await page.getByRole("button", { name: "Opciones de escritura" }).click();
+  await page.getByRole("button", { name: "Añadir viñeta" }).click();
+  await expect(area).toContainText("• ");
+  await page.locator("input[type=file]").setInputFiles({
+    name: "ensayo.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("<img src=x onerror=alert(1)>"),
+  });
+  await expect(area).toContainText("<img src=x onerror=alert(1)>");
+  await expect(page.locator(".writing-area img")).toHaveCount(0);
+  await page.locator("input[type=file]").setInputFiles({
+    name: "grande.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.alloc(10001, 120),
+  });
+  await expect(page.locator(".editor-hint")).toContainText("menos de 10 KB");
+});
+
+test("U08: dos pestañas no pisan notas distintas ni una edición simultánea", async ({
+  page,
+}) => {
+  await prepare(page);
+  const second = await page.context().newPage();
+  await second.goto("/");
+  await page.locator(".note-row").filter({ hasText: "Ensayo 1" }).click();
+  await second.locator(".note-row").filter({ hasText: "Ensayo 2" }).click();
+  await page.getByRole("textbox").fill("Primera pestaña ficticia");
+  await second.getByRole("textbox").fill("Segunda pestaña ficticia");
+  page.on("dialog", (d) => d.accept());
+  await page.reload();
+  await expect(
+    page.locator(".note-row").filter({ hasText: "Primera pestaña ficticia" }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".note-row").filter({ hasText: "Segunda pestaña ficticia" }),
+  ).toBeVisible();
+  await page
+    .locator(".note-row")
+    .filter({ hasText: "Primera pestaña ficticia" })
+    .click();
+  second.on("dialog", (d) => d.accept());
+  await second.reload();
+  await second
+    .locator(".note-row")
+    .filter({ hasText: "Primera pestaña ficticia" })
+    .click();
+  await page.getByRole("textbox").fill("Cambio concurrente ficticio");
+  await second.getByRole("textbox").fill("Borrador en conflicto ficticio");
+  await expect(second.getByRole("alert")).toContainText("otra pestaña");
+  await page.reload();
+  await expect(
+    page
+      .locator(".note-row")
+      .filter({ hasText: "Cambio concurrente ficticio" }),
+  ).toBeVisible();
+  await expect(
+    page
+      .locator(".note-row")
+      .filter({ hasText: "Borrador en conflicto ficticio" }),
+  ).toHaveCount(0);
+});
+
+===== FIN: tests/audit/complete.spec.ts =====
+
+
+===== ARCHIVO: tests/audit/delete-performance.spec.ts =====
+import { test, expect, type Page } from "playwright/test";
+import { prepare, fixtures } from "./fixtures";
+
+// Each worker uses a disposable artist: session limits stay real and isolated.
+test.use({
+  extraHTTPHeaders: {
+    "oai-authenticated-user-id": `deletion-test-${crypto.randomUUID()}`,
+    "oai-authenticated-user-email": "deletion@fiction.invalid",
+  },
+});
+
+async function activateDelete(page: Page) {
+  const button = page.getByRole("button", {
+    name: "Eliminar nota",
+    exact: true,
+  });
+  if ((page.viewportSize()?.width ?? 1280) < 1000) await button.tap();
+  else await button.click();
+}
+
+test("D01: eliminar copia de actuación también retira el original del listado", async ({
+  page,
+}) => {
+  const notes = fixtures();
+  notes[3].text = "600000001";
+  await prepare(page, notes);
+  await page.getByRole("button", { name: "Menú y área del artista" }).click();
+  await page
+    .getByRole("button", { name: "Preparar sesión", exact: true })
+    .click();
+  await page.locator(".note-row").filter({ hasText: "600000001" }).click();
+  await page.getByRole("button", { name: "Opciones de nota" }).click();
+  await activateDelete(page);
+  await expect(
+    page.getByRole("heading", { name: "Notas", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".note-row").filter({ hasText: "600000001" }),
+  ).toHaveCount(0);
+  await page.reload();
+  await expect(
+    page.locator(".note-row").filter({ hasText: "600000001" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Carpetas", exact: true }).click();
+  await page.getByRole("button", { name: /Eliminadas recientemente/ }).click();
+  await expect(page.getByText("600000001", { exact: true })).toBeVisible();
+  await page
+    .getByRole("button", { name: "Recuperar 600000001", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Volver a Carpetas" }).click();
+  await page.getByRole("button", { name: /^Notas/ }).click();
+  await expect(
+    page.locator(".note-row").filter({ hasText: "600000001" }),
+  ).toHaveCount(1);
+});
+
+test("D02: eliminar se activa por toque aunque Safari no entregue click", async ({
+  page,
+}) => {
+  await prepare(page);
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  await page.getByRole("textbox").fill("Borrado de ensayo ficticio");
+  await page.getByRole("button", { name: "Opciones de nota" }).click();
+  const button = page.getByRole("button", {
+    name: "Eliminar nota",
+    exact: true,
+  });
+  await button.dispatchEvent("pointerdown", {
+    pointerId: 7,
+    isPrimary: true,
+    pointerType: "touch",
+    button: 0,
+    clientX: 100,
+    clientY: 200,
+  });
+  await button.dispatchEvent("pointerup", {
+    pointerId: 7,
+    isPrimary: true,
+    pointerType: "touch",
+    button: 0,
+    clientX: 100,
+    clientY: 200,
+  });
+  await expect(
+    page.getByRole("heading", { name: "Notas", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".note-row").filter({ hasText: "Borrado de ensayo ficticio" }),
+  ).toHaveCount(0);
+});
+
+test("D03: borrado de nota temporal descarta respuesta tardía y no guarda datos en papelera", async ({
+  page,
+}) => {
+  await prepare(page);
+  await page.getByRole("button", { name: "Menú y área del artista" }).click();
+  await page
+    .getByRole("button", { name: "Preparar sesión", exact: true })
+    .click();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/query", async (route) => {
+    const b = route.request().postDataJSON();
+    await gate;
+    await route.fulfill({
+      json: {
+        ...b,
+        phone: "+34600000001",
+        status: "completado",
+        providerMs: 1,
+        result: {
+          requestId: b.requestId,
+          phone: "+34600000001",
+          final: true,
+          found: true,
+          name: "Respuesta ficticia tardía",
+        },
+      },
+    });
+  });
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  const request = page.waitForRequest("**/api/query");
+  await page.getByRole("textbox").fill("600000001");
+  await request;
+  await page.getByRole("button", { name: "Opciones de nota" }).click();
+  await activateDelete(page);
+  release();
+  await expect(
+    page.getByRole("heading", { name: "Notas", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".note-row")).toHaveCount(8);
+  await expect(page.locator(".peek-result")).toHaveCount(0);
+  await page.getByRole("button", { name: "Carpetas", exact: true }).click();
+  await page.getByRole("button", { name: /Eliminadas recientemente/ }).click();
+  await expect(page.getByText("No hay notas eliminadas.")).toBeVisible();
+  expect(
+    await page.evaluate(() => localStorage.getItem("notas-escena.ordinary.v1")),
+  ).not.toContain("Respuesta ficticia tardía");
+});
+
+===== FIN: tests/audit/delete-performance.spec.ts =====
+
+
+===== ARCHIVO: tests/audit/fixtures.ts =====
+import type { Page } from "playwright/test";
+export const key = "notas-escena.ordinary.v1";
+export function fixtures(count = 8, length = 80) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+    text: `Ensayo ${i + 1}\n${"Un recuerdo imaginario. ".repeat(Math.ceil(length / 24)).slice(0, length)}`,
+    pinned: i < 3,
+    updated: Date.now() - (i < 3 ? i : i < 5 ? 1 : i < 7 ? 4 : 15) * 86400000,
+  }));
+}
+export async function prepare(page: Page, notes = fixtures()) {
+  const origin = new URL(process.env.AUDIT_BASE_URL ?? "http://127.0.0.1:5178");
+  if (!["127.0.0.1", "localhost"].includes(origin.hostname))
+    throw Error("Audit fixtures require loopback");
+  await page.addInitScript(
+    ({ key, notes }) => {
+      if (!sessionStorage.getItem("audit-fixture-initialized")) {
+        localStorage.setItem(key, JSON.stringify(notes));
+        sessionStorage.setItem("audit-fixture-initialized", "yes");
+      }
+    },
+    { key, notes },
+  );
+  await page.goto("/");
+  await page.getByRole("heading", { name: "Notas", exact: true }).waitFor();
+}
+
+===== FIN: tests/audit/fixtures.ts =====
+
+
+===== ARCHIVO: tests/audit/regressions.spec.ts =====
+import { test, expect } from "playwright/test";
+import { prepare } from "./fixtures";
+test.beforeEach(async ({ page }) => {
+  await prepare(page);
+});
+test("N01: nota vacía se descarta al volver", async ({ page }) => {
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  await page.getByRole("button", { name: "Volver a las notas" }).click();
+  await expect(page.getByText("8 notas", { exact: true })).toBeVisible();
+});
+test("N02: recarga inmediata conserva el último texto escrito", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  await page
+    .getByRole("textbox", { name: "Texto de la nota" })
+    .fill("Borrador inmediato ficticio");
+  page.on("dialog", (d) => d.accept());
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: /Borrador inmediato ficticio/ }),
+  ).toBeVisible();
+});
+test("N03: búsqueda se conserva al abrir y volver", async ({ page }) => {
+  await page.getByRole("searchbox").fill("Ensayo 6");
+  await page.locator(".note-row").click();
+  await page.getByRole("button", { name: "Volver a las notas" }).click();
+  await expect(page.getByRole("searchbox")).toHaveValue("Ensayo 6");
+  await expect(page.locator(".note-row")).toHaveCount(1);
+});
+test("N04: Escape cierra las opciones sin cambiar la nota", async ({
+  page,
+}) => {
+  await page.locator(".note-row").first().click();
+  await page.getByRole("button", { name: "Opciones de nota" }).click();
+  await expect(page.locator(".note-menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".note-menu")).toHaveCount(0);
+  await expect(
+    page.getByRole("textbox", { name: "Texto de la nota" }),
+  ).toContainText("Ensayo 1");
+});
+test("N05: eliminar se puede recuperar desde Eliminadas", async ({ page }) => {
+  await page.locator(".note-row").first().click();
+  await page.getByRole("button", { name: "Opciones de nota" }).click();
+  await page
+    .getByRole("button", { name: "Eliminar nota", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Carpetas", exact: true }).click();
+  await page.getByRole("button", { name: /Eliminadas recientemente/ }).click();
+  await expect(page.getByText("Ensayo 1", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /Recuperar Ensayo 1/ }).click();
+  await page.getByRole("button", { name: "Volver a Carpetas" }).click();
+  await page.getByRole("button", { name: /^Notas/ }).click();
+  await expect(page.locator(".note-row")).toHaveCount(8);
+});
+
+===== FIN: tests/audit/regressions.spec.ts =====
+
+
+===== ARCHIVO: tests/audit/responsive.spec.ts =====
+import { test, expect } from "playwright/test";
+import { prepare } from "./fixtures";
+test("N06: texto al 200% conserva líneas sin recorte vertical", async ({
+  page,
+}) => {
+  await prepare(page);
+  await page.addStyleTag({ content: ":root{font-size:32px !important}" });
+  const title = page.locator(".row-title").first();
+  const metrics = await title.evaluate((el) => ({
+    height: el.getBoundingClientRect().height,
+    font: parseFloat(getComputedStyle(el).fontSize),
+  }));
+  expect(metrics.height).toBeGreaterThanOrEqual(metrics.font);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(page.viewportSize()!.width);
+});
+test("N07: buscador permanece dentro de VisualViewport al abrir teclado simulado", async ({
+  page,
+}) => {
+  await prepare(page);
+  await page.getByRole("searchbox").click();
+  await page.evaluate(() => {
+    Object.defineProperty(visualViewport, "height", {
+      configurable: true,
+      get: () => 300,
+    });
+    visualViewport?.dispatchEvent(new Event("resize"));
+  });
+  await expect
+    .poll(() =>
+      page
+        .locator(".search-pill")
+        .evaluate((el) => el.getBoundingClientRect().bottom),
+    )
+    .toBeLessThanOrEqual(300);
+});
+
+test("N08: atrás del navegador vuelve al listado conservando la nota", async ({
+  page,
+}) => {
+  await prepare(page);
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  await page
+    .getByRole("textbox", { name: "Texto de la nota" })
+    .fill("Regreso ficticio");
+  await page.goBack();
+  await expect(
+    page.getByRole("heading", { name: "Notas", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Regreso ficticio/ }),
+  ).toBeVisible();
+});
+
+===== FIN: tests/audit/responsive.spec.ts =====
+
+
+===== ARCHIVO: tests/audit/visual.spec.ts =====
+import { test, expect } from "playwright/test";
+import { fixtures, prepare } from "./fixtures";
+test("V01: proporciones, controles y capturas comparables con Notas", async ({
+  page,
+}, info) => {
+  const notes = fixtures(10);
+  notes[3].pinned = true;
+  await prepare(page, notes);
+  const geometry = await page
+    .locator(".note-card")
+    .first()
+    .evaluate((el) => ({
+      radius: getComputedStyle(el).borderTopLeftRadius,
+      x: el.getBoundingClientRect().x,
+    }));
+  if (info.project.name.endsWith("390")) {
+    expect(geometry.radius).toBe("26px");
+    expect(geometry.x).toBe(20);
+  }
+  await page.screenshot({
+    path: info.outputPath("listado.png"),
+    fullPage: false,
+    scale: "css",
+  });
+  await page.getByRole("button", { name: "Crear nueva nota" }).click();
+  await page
+    .getByRole("textbox", { name: "Texto de la nota" })
+    .fill("600000001");
+  const labels = [
+    "Volver a las notas",
+    "Deshacer",
+    "Compartir nota",
+    "Opciones de nota",
+    "Finalizar escritura",
+  ];
+  for (const name of labels) {
+    const b = (await page
+      .getByRole("button", { name, exact: true })
+      .boundingBox())!;
+    expect(b.width).toBeGreaterThanOrEqual(44);
+    expect(b.height).toBeGreaterThanOrEqual(44);
+  }
+  const pencil = await page
+    .getByRole("button", { name: "Opciones de escritura" })
+    .boundingBox();
+  const link = await page.locator(".link-tool").boundingBox();
+  expect(link!.x).toBeGreaterThan(pencil!.x);
+  await page.screenshot({
+    path: info.outputPath("editor.png"),
+    fullPage: false,
+    scale: "css",
+  });
+  await page.getByRole("button", { name: "Opciones de nota" }).click();
+  await page.screenshot({
+    path: info.outputPath("opciones.png"),
+    fullPage: false,
+    scale: "css",
+  });
+});
+
+===== FIN: tests/audit/visual.spec.ts =====
+
+
+===== ARCHIVO: tests/automatic-lookup.test.ts =====
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  AutomaticLookup,
+  eligiblePhone,
+} from "../lib/client/automatic-lookup.ts";
+const context = {
+  sessionId: "session",
+  noteId: "note",
+  revision: 1,
+  generation: 1,
+};
+test("detección automática exige un único móvil completo seleccionado", () => {
+  const allowed = new Set(["+34600000001"]);
+  assert.equal(eligiblePhone("600 000-001", allowed), "+34600000001");
+  for (const text of [
+    "60000000",
+    "611111111",
+    "600000001 700000002",
+    "+34+34600000001",
+    "800000001",
+  ])
+    assert.equal(eligiblePhone(text, allowed), null);
+});
+test("una consulta automática por sesión, nota y número; editar no provoca reintentos", () => {
+  const lookup = new AutomaticLookup();
+  assert.equal(lookup.reserve(context, "+34600000001"), true);
+  assert.equal(
+    lookup.reserve({ ...context, revision: 2 }, "+34600000001"),
+    false,
+  );
+  assert.equal(
+    lookup.reserve({ ...context, noteId: "other" }, "+34600000001"),
+    true,
+  );
+  lookup.reset();
+  assert.equal(lookup.reserve(context, "+34600000001"), true);
+});
+test("peek solo mientras se mantiene pulsado; soltar oculta y permite repetir sin consultar", () => {
+  const lookup = new AutomaticLookup();
+  lookup.stage(context, "\n\nNombre: Persona ficticia");
+  assert.equal(lookup.peek(context), null);
+  lookup.startHold(context);
+  assert.equal(lookup.peek(context), "\n\nNombre: Persona ficticia");
+  lookup.release();
+  assert.equal(lookup.peek(context), null);
+  lookup.startHold(context);
+  assert.equal(lookup.peek(context), "\n\nNombre: Persona ficticia");
+});
+test("cambio de nota, revisión, sesión o generación descarta la respuesta reservada", () => {
+  for (const changed of [
+    { ...context, noteId: "other" },
+    { ...context, revision: 2 },
+    { ...context, sessionId: "other" },
+    { ...context, generation: 2 },
+  ]) {
+    const lookup = new AutomaticLookup();
+    lookup.stage(context, "respuesta");
+    lookup.startHold(changed);
+    assert.equal(lookup.peek(changed), null);
+    assert.equal(lookup.result(context), null);
+  }
+  const lookup = new AutomaticLookup();
+  lookup.stage(context, "respuesta");
+  lookup.discard();
+  assert.equal(lookup.result(context), null);
+});
+test("soltar antes de la respuesta evita que aparezca después; otro contexto nunca revela", () => {
+  const lookup = new AutomaticLookup();
+  lookup.startHold(context);
+  lookup.release();
+  lookup.stage(context, "ficticio");
+  assert.equal(lookup.peek(context), null);
+  lookup.startHold(context);
+  assert.equal(lookup.peek(context), "ficticio");
+  assert.equal(lookup.peek({ ...context, revision: 2 }), null);
+  lookup.discard();
+  assert.equal(lookup.peek(context), null);
+});
+
+===== FIN: tests/automatic-lookup.test.ts ===

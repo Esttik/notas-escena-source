@@ -1,0 +1,871 @@
+ técnico amplio a tu cuenta. Nuestro programa consulta solo @TrueCalleRobot y tu propio teléfono.</p><small>Puedes revocar la sesión en Telegram → Ajustes → Dispositivos. Los códigos y la contraseña no se guardan. La sesión se cifra en el servidor; las credenciales de aplicación ya están configuradas y no llegan a esta página.</small>
+<form id="form"><section id="phone"><label for="number">Tu móvil español</label><input id="number" type="tel" autocomplete="tel" placeholder="+34 …" required><label for="consent">Para autorizar la sesión y consultar tu teléfono, escribe AUTORIZO</label><input id="consent" autocomplete="off" required></section>
+<section id="challenge" hidden><label id="challenge-label" for="value">Código de Telegram</label><p id="help"></p><input id="value" type="password" autocomplete="off" aria-describedby="help" required disabled></section><button id="submit">Conectar mi cuenta</button></form><p id="result" role="status" aria-live="polite"></p></main>
+<script nonce="${nonce}">
+const token=${JSON.stringify(token)}, $=id=>document.getElementById(id);
+let current='phone',challengeId=0,submittedId=0,inFlight=false,refreshing=false;
+const form=$('form'),result=$('result'),button=$('submit'),value=$('value');
+async function request(path,body){
+ const r=await fetch(path,{method:body?'POST':'GET',headers:{'X-Setup-Token':token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,cache:'no-store'});
+ if(!r.ok)throw Error('Revisa el formato y espera a que termine el paso actual.');return r.json();
+}
+async function refresh(){
+ if(refreshing)return;refreshing=true;
+ try{const s=await request('/status');current=s.stage;
+ if(s.stage==='code'||s.stage==='password'){
+ $('phone').hidden=true;$('challenge').hidden=false;$('number').required=false;$('consent').required=false;
+ if(challengeId!==s.challengeId){challengeId=s.challengeId;value.value='';value.disabled=false;value.inputMode=s.stage==='code'?'numeric':'text';value.maxLength=s.stage==='code'?30:511;value.focus();}
+ $('challenge-label').textContent=s.stage==='code'?'Código de acceso de Telegram':'Contraseña de verificación en dos pasos';
+ $('help').textContent=s.stage==='password'?'Es tu contraseña adicional de Telegram, no el código numérico. No se guardará.':(s.delivery==='app'?'Abre la app Telegram y busca el mensaje nuevo del servicio Telegram.':s.delivery==='sms'?'Telegram ha enviado el código nuevo por SMS.':'Utiliza el código del método que acaba de indicar Telegram.')+(s.length?' Tiene '+s.length+' dígitos.':'')+' Usa el código de ESTA vinculación, no el utilizado antes para my.telegram.org. No lo pegues en este chat.';
+ button.textContent='Confirmar';button.disabled=inFlight||!s.waiting||submittedId===challengeId;value.disabled=!s.waiting||submittedId===challengeId;
+ result.textContent=s.error==='PHONE_CODE_INVALID'?'Telegram ha rechazado el código. Puedes corregirlo aquí sin solicitar otro.':s.error==='PASSWORD_HASH_INVALID'?'Telegram ha rechazado la contraseña adicional. Puedes corregirla aquí.':s.waiting?'Esperando tu confirmación.':'Comprobando con Telegram…';
+ }else if(s.stage==='complete'){form.hidden=true;result.textContent='Cuenta vinculada y sesión cifrada. Todavía no se ha consultado tu teléfono.';clearInterval(timer);
+ }else if(s.stage==='error'){form.hidden=true;const messages={PHONE_CODE_EXPIRED:'El código ha caducado. Hay que iniciar una vinculación nueva.',PHONE_CODE_INVALID:'Telegram ha rechazado tres códigos. Se ha detenido la vinculación.',TELEGRAM_RATE_LIMIT:'Telegram exige esperar. No sigas intentando vincular la cuenta.',LOGIN_TIMEOUT:'Se agotó el tiempo de vinculación.'};result.textContent=(messages[s.error]||'Vinculación detenida: '+s.error)+ ' No se reintentará automáticamente.';clearInterval(timer);}
+ }catch(e){result.textContent=e.message;}finally{refreshing=false;}
+}
+form.addEventListener('submit',async e=>{e.preventDefault();if(inFlight||button.disabled)return;inFlight=true;button.disabled=true;try{
+ if(current==='phone')await request('/connect',{phone:$('number').value,consent:$('consent').value});
+ else {const id=challengeId;await request('/input',{id,value:value.value});submittedId=id;value.value='';}
+ result.textContent='Esperando a Telegram…';
+ }catch(e){result.textContent=e.message;}finally{inFlight=false;await refresh();}});
+const timer=setInterval(refresh,1000);refresh();
+</script></html>`;
+}
+
+===== FIN: bridge/src/setup-page.ts =====
+
+
+===== ARCHIVO: bridge/src/setup.ts =====
+import { createServer } from "node:http";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { normalizePhone } from "../../lib/domain.ts";
+import { makeClient } from "./telegram-client.ts";
+import { recordSession } from "./session-record.ts";
+import { BridgeError, loginError } from "./errors.ts";
+import { LoginChallenge } from "./login-challenge.ts";
+import { setupPage } from "./setup-page.ts";
+const port = 8790,
+  host = `127.0.0.1:${port}`,
+  origin = `http://${host}`,
+  token = randomBytes(32).toString("hex");
+const client = makeClient("", true);
+type Stage = "phone" | "code" | "password" | "complete" | "error";
+let stage: Stage = "phone",
+  error = "",
+  busy = false;
+const challenge = new LoginChallenge();
+function input(next: "code" | "password", length?: number, delivery?: string) {
+  stage = next;
+  return challenge.wait(next, length, delivery);
+}
+let expiry: ReturnType<typeof setTimeout> | undefined;
+async function connect(phone: string) {
+  try {
+    await client.start({
+      phoneNumber: async () => phone,
+      phoneCode: (viaApp, info) =>
+        input("code", info?.length, info?.type ?? (viaApp ? "app" : "sms")),
+      password: () => input("password"),
+      firstAndLastNames: async () => {
+        throw new BridgeError("EXISTING_ACCOUNT_REQUIRED", 400);
+      },
+      reCaptchaCallback: async () => {
+        throw new BridgeError("CAPTCHA_REQUIRES_OWNER", 403);
+      },
+      onError: (e) => {
+        challenge.recover(e);
+      },
+    });
+    await recordSession(client, phone);
+    stage = "complete";
+  } catch (e) {
+    stage = "error";
+    error = loginError(e).code;
+  } finally {
+    if (expiry) clearTimeout(expiry);
+    busy = false;
+    challenge.cancel();
+    await client.disconnect();
+  }
+}
+const server = createServer(async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  if (req.headers.host !== host) {
+    res.writeHead(403);
+    res.end();
+    return;
+  }
+  if (req.method === "GET" && req.url === "/") {
+    const nonce = randomBytes(18).toString("base64");
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader(
+      "Content-Security-Policy",
+      `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,
+    );
+    res.end(setupPage(nonce, token));
+    return;
+  }
+  const presented = String(req.headers["x-setup-token"] ?? "");
+  if (
+    !/^[a-f0-9]{64}$/.test(presented) ||
+    !timingSafeEqual(Buffer.from(presented), Buffer.from(token)) ||
+    (req.method === "POST" && req.headers.origin !== origin)
+  ) {
+    res.writeHead(403);
+    res.end();
+    return;
+  }
+  res.setHeader("Content-Type", "application/json");
+  try {
+    if (req.method === "GET" && req.url === "/status") {
+      res.end(
+        JSON.stringify({
+          stage,
+          error: error || challenge.error,
+          waiting: !!challenge.pending,
+          challengeId: challenge.id,
+          length: challenge.length,
+          delivery: challenge.delivery,
+        }),
+      );
+      return;
+    }
+    if (
+      req.method !== "POST" ||
+      req.headers["content-type"] !== "application/json"
+    )
+      throw new BridgeError("INPUT", 400);
+    let size = 0;
+    const parts: Buffer[] = [];
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > 2048) throw new BridgeError("BODY_LIMIT", 413);
+      parts.push(chunk);
+    }
+    const body = JSON.parse(Buffer.concat(parts).toString("utf8"));
+    if (req.url === "/connect") {
+      if (
+        busy ||
+        stage !== "phone" ||
+        body.consent !== "AUTORIZO" ||
+        typeof body.phone !== "string"
+      )
+        throw new BridgeError("CONSENT", 400);
+      const phone = normalizePhone(body.phone);
+      busy = true;
+      expiry = setTimeout(() => {
+        stage = "error";
+        error = "LOGIN_TIMEOUT";
+        challenge.cancel();
+        void client.disconnect();
+      }, 180000);
+      void connect(phone);
+      res.end('{"ok":true}');
+      return;
+    }
+    if (req.url === "/input") {
+      challenge.submit(body.id, body.value);
+      res.end('{"ok":true}');
+      return;
+    }
+    throw new BridgeError("INPUT", 400);
+  } catch (e) {
+    res.writeHead(e instanceof BridgeError ? e.status : 400);
+    res.end('{"error":"INPUT"}');
+  }
+});
+server.requestTimeout = 10000;
+server.headersTimeout = 5000;
+server.maxHeadersCount = 30;
+server.listen(port, "127.0.0.1", () =>
+  console.log(`Vinculación local: ${origin}/`),
+);
+server.on("error", () => {
+  console.error("SETUP_LISTEN");
+  process.exitCode = 1;
+});
+function stop() {
+  if (expiry) clearTimeout(expiry);
+  challenge.cancel();
+  server.closeAllConnections();
+  server.close(() => {
+    void client.disconnect().finally(() => process.exit(0));
+  });
+}
+process.once("SIGINT", stop);
+process.once("SIGTERM", stop);
+
+===== FIN: bridge/src/setup.ts =====
+
+
+===== ARCHIVO: bridge/src/telegram-client.ts =====
+import { Api, TelegramClient } from "teleproto";
+import { StringSession } from "teleproto/sessions";
+import { Logger, LogLevel } from "teleproto/extensions/Logger.js";
+import { createHash } from "node:crypto";
+import { normalizePhone } from "../../lib/domain.ts";
+import { BridgeError } from "./errors.ts";
+import type { Message, Transport } from "./engine.ts";
+export function incomingMessage(raw: Api.TypeMessage): Message | null {
+  if (
+    !(raw instanceof Api.Message) ||
+    raw.out ||
+    !(raw.peerId instanceof Api.PeerUser) ||
+    raw.peerId.userId.toString() !== "6108968969" ||
+    raw.fwdFrom ||
+    raw.viaBotId ||
+    (raw.fromId &&
+      (!(raw.fromId instanceof Api.PeerUser) ||
+        raw.fromId.userId.toString() !== "6108968969"))
+  )
+    return null;
+  // Telegram may omit from_id in a private incoming message. The authenticated
+  // peer, incoming flag and absence of forwarding identify the correspondent.
+  return {
+    id: raw.id,
+    senderId: "6108968969",
+    chatId: "6108968969",
+    replyTo: raw.replyTo?.replyToMsgId,
+    text: raw.message,
+  };
+}
+export function applicationCredentials() {
+  const apiId = Number(process.env.TELEGRAM_API_ID),
+    apiHash = process.env.TELEGRAM_API_HASH ?? "";
+  if (
+    !Number.isSafeInteger(apiId) ||
+    apiId < 1 ||
+    !/^[a-f0-9]{32}$/i.test(apiHash)
+  )
+    throw new BridgeError("APPLICATION_CREDENTIALS", 503);
+  return { apiId, apiHash };
+}
+export function makeClient(session: string, login = false) {
+  const { apiId, apiHash } = applicationCredentials();
+  return new TelegramClient(new StringSession(session), apiId, apiHash, {
+    baseLogger: new Logger(LogLevel.NONE),
+    requestRetries: login ? 3 : 1,
+    floodSleepThreshold: 0,
+    connectionRetries: 1,
+    reconnectRetries: 1,
+    autoReconnect: false,
+    timeout: 5,
+    deviceModel: "Notas Escena · servidor propio",
+    appVersion: "0.1.0",
+    securityChecks: true,
+  });
+}
+export class UserTransport implements Transport {
+  client: TelegramClient;
+  peer: Api.InputPeerUser | null = null;
+  constructor(client: TelegramClient) {
+    this.client = client;
+  }
+  options(signal: AbortSignal, timeout = 3000): Api.ApiCallOptions {
+    return {
+      abortSignal: signal,
+      timeout,
+      maxRetryCount: 0,
+      floodSleepThreshold: 0,
+    };
+  }
+  async verify(signal: AbortSignal) {
+    const [me] = await this.client.api.users.getUsers(
+      { id: [new Api.InputUserSelf()] },
+      this.options(signal),
+    );
+    const resolved = await this.client.api.contacts.resolveUsername(
+      { username: "TrueCalleRobot" },
+      this.options(signal),
+    );
+    const bot = resolved.users.find(
+      (u) => u instanceof Api.User && u.id.toString() === "6108968969",
+    );
+    if (
+      !(me instanceof Api.User) ||
+      me.bot ||
+      !me.phone ||
+      !(bot instanceof Api.User) ||
+      !bot.bot ||
+      !bot.accessHash ||
+      !(resolved.peer instanceof Api.PeerUser) ||
+      resolved.peer.userId.toString() !== "6108968969"
+    )
+      throw new BridgeError("ACCOUNT_OR_TARGET", 503);
+    this.peer = new Api.InputPeerUser({
+      userId: bot.id,
+      accessHash: bot.accessHash,
+    });
+    return {
+      phone: normalizePhone("+" + me.phone),
+      targetId: bot.id.toString(),
+      targetBot: !!bot.bot,
+      targetUsername: bot.username ?? "",
+    };
+  }
+  async send(phone: string, signal: AbortSignal, requestId: string) {
+    if (!this.peer) throw new BridgeError("TARGET", 503);
+    const randomId = BigInt.asIntN(
+      64,
+      BigInt(
+        "0x" +
+          createHash("sha256").update(requestId).digest("hex").slice(0, 16),
+      ),
+    );
+    const result = await this.client.api.messages.sendMessage(
+      { peer: this.peer, message: phone, randomId, noWebpage: true },
+      this.options(signal),
+    );
+    if (result instanceof Api.UpdateShortSentMessage) return result.id;
+    if (
+      result instanceof Api.Updates ||
+      result instanceof Api.UpdatesCombined
+    ) {
+      const matching = result.updates.find(
+        (u) =>
+          u instanceof Api.UpdateMessageID &&
+          u.randomId?.toString() === randomId.toString(),
+      );
+      if (matching instanceof Api.UpdateMessageID) return matching.id;
+      const update = result.updates.find(
+        (u) =>
+          u instanceof Api.UpdateNewMessage &&
+          u.message instanceof Api.Message &&
+          u.message.out &&
+          u.message.message === phone &&
+          u.message.peerId instanceof Api.PeerUser &&
+          u.message.peerId.userId.toString() === "6108968969",
+      );
+      if (
+        update instanceof Api.UpdateNewMessage &&
+        update.message instanceof Api.Message
+      )
+        return update.message.id;
+    }
+    throw new BridgeError("SEND_UNCONFIRMED");
+  }
+  async messages(sent: number, signal: AbortSignal): Promise<Message[]> {
+    if (!this.peer) throw new BridgeError("TARGET", 503);
+    const history = await this.client.api.messages.getHistory(
+      {
+        peer: this.peer,
+        offsetId: 0,
+        offsetDate: 0,
+        addOffset: 0,
+        limit: 20,
+        maxId: 0,
+        minId: sent,
+        hash: 0n,
+      },
+      this.options(signal, 2000),
+    );
+    if (!("messages" in history)) return [];
+    return history.messages
+      .map(incomingMessage)
+      .filter((m): m is Message => m !== null);
+  }
+}
+
+===== FIN: bridge/src/telegram-client.ts =====
+
+
+===== ARCHIVO: bridge/src/vault.ts =====
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import {
+  mkdirSync,
+  chmodSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  lstatSync,
+} from "node:fs";
+import { join } from "node:path";
+import { BridgeError } from "./errors.ts";
+function key(value: string) {
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.length !== 32) throw new BridgeError("VAULT_KEY", 503);
+  return bytes;
+}
+export function seal(value: string, encodedKey: string): string {
+  const iv = randomBytes(12),
+    cipher = createCipheriv("aes-256-gcm", key(encodedKey), iv);
+  const data = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  return JSON.stringify({
+    v: 1,
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+    data: data.toString("base64"),
+  });
+}
+export function unseal(value: string, encodedKey: string): string {
+  try {
+    const v = JSON.parse(value);
+    if (
+      v.v !== 1 ||
+      typeof v.iv !== "string" ||
+      typeof v.tag !== "string" ||
+      typeof v.data !== "string" ||
+      value.length > 20000
+    )
+      throw new Error();
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      key(encodedKey),
+      Buffer.from(v.iv, "base64"),
+    );
+    decipher.setAuthTag(Buffer.from(v.tag, "base64"));
+    return Buffer.concat([
+      decipher.update(Buffer.from(v.data, "base64")),
+      decipher.final(),
+    ]).toString("utf8");
+  } catch {
+    throw new BridgeError("VAULT_INVALID", 503);
+  }
+}
+export function stateDirectory() {
+  const path = process.env.BRIDGE_STATE_DIR || ".bridge-state";
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  if (lstatSync(path).isSymbolicLink())
+    throw new BridgeError("STATE_PATH", 503);
+  chmodSync(path, 0o700);
+  return path;
+}
+export function saveSession(session: string, encodedKey: string) {
+  const dir = stateDirectory(),
+    temporary = join(dir, "session.new");
+  writeFileSync(temporary, seal(session, encodedKey), {
+    mode: 0o600,
+    flag: "wx",
+  });
+  renameSync(temporary, join(dir, "session.enc"));
+  chmodSync(join(dir, "session.enc"), 0o600);
+}
+export function loadSession(encodedKey: string) {
+  const path = join(stateDirectory(), "session.enc");
+  if (lstatSync(path).isSymbolicLink() || lstatSync(path).mode & 0o077)
+    throw new BridgeError("SESSION_PERMISSIONS", 503);
+  return unseal(readFileSync(path, "utf8"), encodedKey);
+}
+
+===== FIN: bridge/src/vault.ts =====
+
+
+===== ARCHIVO: bridge/tests/cloud.test.ts =====
+import test from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServer } from "node:net";
+import { getDatabase } from "@netlify/database";
+import { CloudLedger, type SqlPool } from "../src/cloud-ledger.ts";
+import { BridgeEngine, type Transport } from "../src/engine.ts";
+import { createCloudHandler } from "../src/cloud-http.ts";
+const phone = "+34600000001",
+  secret = "fictional-server-secret-".repeat(3);
+const holder = () => ({
+  phone,
+  scope: "lookup",
+  consentRef: "owner-login:" + crypto.randomUUID(),
+  ownershipVerifiedAt: new Date().toISOString(),
+  expiresAt: new Date(Date.now() + 86400000).toISOString(),
+});
+test("nube: autorización, tamaño, origen y resultado no confiable antes de exponer datos", async () => {
+  let calls = 0;
+  const input = {
+    phone,
+    requestId: crypto.randomUUID(),
+    sessionId: crypto.randomUUID(),
+  };
+  let consent = holder();
+  const handler = createCloudHandler(
+    async (i) => {
+      calls++;
+      return {
+        requestId: i.requestId,
+        phone: i.phone,
+        final: true as const,
+        found: true,
+        name: "<script>ficticio</script>",
+      };
+    },
+    () => ({ secret, holder: consent }),
+  );
+  const request = (body: unknown = input, extra: Record<string, string> = {}) =>
+    new Request("https://example.test/lookup", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${secret}`,
+        "content-type": "application/json",
+        "idempotency-key": input.requestId,
+        ...extra,
+      },
+      body: JSON.stringify(body),
+    });
+  assert.equal(
+    (await handler(request(input, { authorization: "wrong" }))).status,
+    401,
+  );
+  assert.equal(
+    (await handler(request(input, { origin: "https://example.test" }))).status,
+    403,
+  );
+  assert.equal(
+    (await handler(request({ ...input, phone: "+34700000002" }))).status,
+    403,
+  );
+  assert.equal((await handler(request({ ...input, extra: "x" }))).status, 400);
+  assert.equal(
+    (await handler(request({ ...input, phone: "x".repeat(3000) }))).status,
+    413,
+  );
+  consent.expiresAt = new Date(Date.now() - 1).toISOString();
+  assert.equal((await handler(request())).status, 403);
+  assert.equal(calls, 0);
+  consent = holder();
+  const result = await handler(request());
+  assert.equal(result.status, 200);
+  assert.equal(result.headers.get("cache-control"), "no-store");
+  assert.equal(result.headers.get("access-control-allow-origin"), null);
+  assert.equal((await result.json()).name, "<script>ficticio</script>");
+  assert.equal(calls, 1);
+});
+test("nube: Postgres comparte bloqueo, UUID y límite entre instancias; no guarda datos personales", async () => {
+  // PGlite is single-process and cannot prove cross-connection row locks. Start
+  // an isolated genuine Postgres cluster; never alter the user's installed DB.
+  const root = mkdtempSync(join(tmpdir(), "notas-ledger-test-"));
+  const bin = process.env.POSTGRES_BIN || "/opt/homebrew/opt/postgresql@17/bin";
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as { port: number }).port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  execFileSync(
+    join(bin, "initdb"),
+    ["-D", root, "-U", "notas_test", "-A", "trust", "--no-locale"],
+    { stdio: "pipe" },
+  );
+  execFileSync(
+    join(bin, "pg_ctl"),
+    [
+      "-D",
+      root,
+      "-l",
+      join(root, "postgres.log"),
+      "-o",
+      `-h 127.0.0.1 -p ${port} -k ${root}`,
+      "-w",
+      "start",
+    ],
+    { stdio: "pipe" },
+  );
+  const url = `postgres://notas_test@127.0.0.1:${port}/postgres`;
+  const database = getDatabase({ connectionString: url });
+  const pool = database.pool as SqlPool;
+  let now = Date.now();
+  try {
+    const migration = await pool.connect();
+    try {
+      await migration.query(
+        readFileSync(
+          "netlify/database/migrations/20261012013000_bridge_ledger.sql",
+          "utf8",
+        ),
+      );
+    } finally {
+      migration.release();
+    }
+    const a = new CloudLedger(pool, secret, () => now),
+      b = new CloudLedger(pool, secret, () => now);
+    const first = crypto.randomUUID(),
+      second = crypto.randomUUID(),
+      session = crypto.randomUUID();
+    const attempts = await Promise.allSettled([
+      a.claim(first, phone, session),
+      b.claim(second, phone, session),
+    ]);
+    assert.equal(attempts.filter((x) => x.status === "fulfilled").length, 1);
+    assert.match(
+      String(
+        (attempts.find((x) => x.status === "rejected") as PromiseRejectedResult)
+          .reason,
+      ),
+      /BUSY_OR_COOLDOWN/,
+    );
+    const winner = attempts[0].status === "fulfilled" ? first : second;
+    await assert.rejects(b.claim(winner, phone, session), /DUPLICATE/);
+    await assert.rejects(
+      b.claim(winner, "+34700000002", session),
+      /PAYLOAD_MISMATCH/,
+    );
+    await a.finish(winner, "complete", 2000);
+    await assert.rejects(
+      b.claim(crypto.randomUUID(), phone, session),
+      /BUSY_OR_COOLDOWN/,
+    );
+    now += 2001;
+    for (let i = 1; i < 20; i++) {
+      const id = crypto.randomUUID();
+      await b.claim(id, phone, session);
+      await b.finish(id, "complete", 0);
+    }
+    await assert.rejects(
+      a.claim(crypto.randomUUID(), phone, session),
+      /RATE_LIMIT/,
+    );
+    const client = await pool.connect();
+    try {
+      const serialized = JSON.stringify(
+        (await client.query("SELECT * FROM bridge_requests")).rows,
+      );
+      assert.equal(serialized.includes(phone), false);
+      assert.equal(serialized.includes("name"), false);
+      assert.equal(
+        (await client.query("SELECT * FROM bridge_requests")).rows.length,
+        20,
+      );
+    } finally {
+      client.release();
+    }
+    now += 86400001;
+    const id = crypto.randomUUID();
+    await a.claim(id, phone, session);
+    await a.finish(id, "complete", 0);
+    const c = await pool.connect();
+    try {
+      assert.equal(
+        (await c.query("SELECT * FROM bridge_requests")).rows.length,
+        1,
+      );
+    } finally {
+      c.release();
+    }
+  } finally {
+    await database.pool.end();
+    execFileSync(
+      join(bin, "pg_ctl"),
+      ["-D", root, "-m", "fast", "-w", "stop"],
+      { stdio: "pipe" },
+    );
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+test("nube: reserva antes de conectar y cierra Telegram antes de liberar la cuenta", async () => {
+  const events: string[] = [];
+  const transport: Transport = {
+    verify: async () => {
+      events.push("connect");
+      return {
+        phone,
+        targetId: "6108968969",
+        targetBot: true,
+        targetUsername: "TrueCalleRobot",
+      };
+    },
+    send: async () => {
+      events.push("send");
+      return 10;
+    },
+    messages: async () => [
+      {
+        id: 11,
+        senderId: "6108968969",
+        chatId: "6108968969",
+        replyTo: 10,
+        text: `Number: ${phone}\nName: Ficticio\nFINAL`,
+      },
+    ],
+    close: async () => {
+      events.push("close");
+    },
+  };
+  const ledger = {
+    claim: async () => {
+      events.push("reserve");
+    },
+    finish: async () => {
+      events.push("release");
+    },
+  };
+  const engine = new BridgeEngine(transport, ledger, { finalSuffix: "FINAL" });
+  await engine.lookup(
+    { phone, requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() },
+    new AbortController().signal,
+  );
+  assert.deepEqual(events, ["reserve", "connect", "send", "close", "release"]);
+  events.length = 0;
+  ledger.claim = async () => {
+    throw new Error("DUPLICATE");
+  };
+  await assert.rejects(
+    engine.lookup(
+      { phone, requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() },
+      new AbortController().signal,
+    ),
+    /DUPLICATE/,
+  );
+  assert.deepEqual(events, []);
+});
+
+===== FIN: bridge/tests/cloud.test.ts =====
+
+
+===== ARCHIVO: bridge/tests/engine.test.ts =====
+import test from "node:test";
+import assert from "node:assert/strict";
+import { BridgeEngine, type Transport, type Message } from "../src/engine.ts";
+import { Ledger } from "../src/ledger.ts";
+const phone = "+34600000001",
+  target = "6108968969";
+function setup(batches?: Message[][]) {
+  let sends = 0,
+    polls = 0;
+  const transport: Transport = {
+    verify: async () => ({
+      phone,
+      targetId: target,
+      targetBot: true,
+      targetUsername: "TrueCalleRobot",
+    }),
+    send: async () => {
+      sends++;
+      return 10;
+    },
+    messages: async () =>
+      batches?.[polls++] ?? [
+        {
+          id: 11,
+          senderId: target,
+          chatId: target,
+          replyTo: 10,
+          text: `Number: ${phone}\nCountry: Spain\nName: Persona ficticia\nFINAL`,
+        },
+      ],
+  };
+  const ledger = new Ledger(":memory:", "test-salt");
+  const engine = new BridgeEngine(transport, ledger, {
+    finalSuffix: "FINAL",
+    pollMs: 1,
+    timeoutMs: 30,
+  });
+  const input = {
+    requestId: crypto.randomUUID(),
+    sessionId: crypto.randomUUID(),
+    phone,
+  };
+  return { engine, ledger, transport, input, sends: () => sends };
+}
+test("puente: sesión de usuario, propio teléfono y origen/ID de respuesta exactos", async () => {
+  const s = setup();
+  const r = await s.engine.lookup(s.input, new AbortController().signal);
+  assert.equal(r.name, "Persona ficticia");
+  assert.equal(r.phone, phone);
+  assert.equal(s.sends(), 1);
+  s.ledger.close();
+});
+test("puente bloquea otro teléfono y destino alterado antes de enviar", async () => {
+  const s = setup();
+  await assert.rejects(
+    s.engine.lookup(
+      { ...s.input, phone: "+34700000002" },
+      new AbortController().signal,
+    ),
+    /OWN_PHONE_ONLY/,
+  );
+  s.ledger.close();
+  const c = setup();
+  c.transport.verify = async () => ({
+    phone,
+    targetId: "999",
+    targetBot: true,
+    targetUsername: "TrueCalleRobot",
+  });
+  await assert.rejects(
+    c.engine.lookup(c.input, new AbortController().signal),
+    /TARGET/,
+  );
+  assert.equal(s.sends(), 0);
+  assert.equal(c.sends(), 0);
+  c.ledger.close();
+});
+test("puente: UUID duplicado nunca reenvía; ledger no contiene teléfono ni nombre", async () => {
+  const s = setup();
+  await s.engine.lookup(s.input, new AbortController().signal);
+  await assert.rejects(
+    s.engine.lookup(s.input, new AbortController().signal),
+    /DUPLICATE/,
+  );
+  assert.equal(s.sends(), 1);
+  const rows = JSON.stringify(
+    s.ledger.db.prepare("SELECT * FROM requests").all(),
+  );
+  assert.equal(rows.includes(phone), false);
+  assert.equal(rows.includes("Persona ficticia"), false);
+  s.ledger.close();
+});
+test("puente ignora otra conversación, mensajes tardíos, duplicados y parciales", async () => {
+  const good = {
+    id: 11,
+    senderId: target,
+    chatId: target,
+    replyTo: 10,
+    text: `Number: ${phone}\nName: Persona ficticia`,
+  };
+  const s = setup([
+    [
+      { ...good, chatId: "other" },
+      { ...good, replyTo: 9 },
+      { ...good, id: 9 },
+      good,
+      good,
+    ],
+    [{ ...good, text: good.text + "\nFINAL" }],
+  ]);
+  const r = await s.engine.lookup(s.input, new AbortController().signal);
+  assert.equal(r.name, "Persona ficticia");
+  assert.equal(s.sends(), 1);
+  s.ledger.close();
+});
+test("puente: timeout no reenvía, aborto no entrega resultado", async () => {
+  const s = setup([[], [], [], []]);
+  s.transport.messages = async () => [];
+  await assert.rejects(
+    s.engine.lookup(s.input, new AbortController().signal),
+    /TIMEOUT/,
+  );
+  assert.equal(s.sends(), 1);
+  s.ledger.close();
+  const c = setup();
+  const abort = new AbortController();
+  abort.abort();
+  await assert.rejects(c.engine.lookup(c.input, abort.signal), /TIMEOUT/);
+  assert.equal(c.sends(), 0);
+  c.ledger.close();
+});
+test("puente: texto malicioso es literal y número distinto se rechaza", async () => {
+  const s = setup([
+    [
+      {
+        id: 11,
+        senderId: target,
+        chatId: target,
+        replyTo: 10,
+        text: `Number: ${phone}\nName: <script>alert(1)</script>\nFINAL`,
+      },
+    ],
+  ]);
+  assert.equal(
+    (await s.engine.lookup(s.input, new AbortController().signal)).name,
+    "<script>alert(1)</script>",
+  );
+  s.ledger.close();
+  const c = setup([
+    [
+      {
+        id: 11,
+        senderId: target,
+        chatId: target,
+        replyTo: 10,
+        text: "Nu

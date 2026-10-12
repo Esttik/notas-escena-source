@@ -1,0 +1,1056 @@
+  "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "cooldown_until": {
+          "name": "cooldown_until",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}
+===== FIN: drizzle/meta/0001_snapshot.json =====
+
+
+===== ARCHIVO: drizzle/meta/_journal.json =====
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1791750810525,
+      "tag": "0000_bouncy_scalphunter",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1791753209757,
+      "tag": "0001_robust_thunderball",
+      "breakpoints": true
+    }
+  ]
+}
+===== FIN: drizzle/meta/_journal.json =====
+
+
+===== ARCHIVO: drizzle.config.ts =====
+import { defineConfig } from "drizzle-kit";
+
+export default defineConfig({
+  out: "./drizzle",
+  schema: "./db/schema.ts",
+  dialect: "sqlite",
+});
+
+===== FIN: drizzle.config.ts =====
+
+
+===== ARCHIVO: eslint.config.mjs =====
+import { defineConfig, globalIgnores } from "eslint/config";
+import nextVitals from "eslint-config-next/core-web-vitals";
+import nextTs from "eslint-config-next/typescript";
+
+const eslintConfig = defineConfig([
+  ...nextVitals,
+  ...nextTs,
+  // Override default ignores of eslint-config-next.
+  globalIgnores([
+    // Default ignores of eslint-config-next:
+    ".next/**",
+    "out/**",
+    "build/**",
+    "next-env.d.ts",
+  ]),
+  {
+    files: ["components/ui/**/*.{ts,tsx}", "hooks/use-mobile.ts"],
+    rules: {
+      // These files are vendored verbatim from shadcn@4.17.0. Keep the
+      // registry source intact while applying the stricter rules to Site code.
+      "@typescript-eslint/no-unused-vars": "off",
+      "react-hooks/purity": "off",
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
+]);
+
+export default eslintConfig;
+
+===== FIN: eslint.config.mjs =====
+
+
+===== ARCHIVO: examples/d1/app/api/notes/route.ts =====
+import { desc } from "drizzle-orm";
+import { getDb } from "../../../../../db";
+import { notes } from "../../../db/schema";
+
+function toRouteErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : "Unexpected error";
+  const detail =
+    error instanceof Error && error.cause instanceof Error ? error.cause.message : "";
+  const combined = `${message}\n${detail}`;
+
+  if (combined.includes("no such table") || combined.includes('from "notes"')) {
+    return "The notes table is unavailable. Generate the migration locally with `npm run db:generate`, then deploy so the platform can apply the generated SQL to the real D1 database.";
+  }
+
+  return message;
+}
+
+export async function GET() {
+  try {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(notes)
+      .orderBy(desc(notes.createdAt), desc(notes.id))
+      .limit(20);
+
+    return Response.json({ notes: rows });
+  } catch (error) {
+    return Response.json(
+      { error: toRouteErrorMessage(error) },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const payload = (await request.json()) as {
+      title?: string;
+      content?: string;
+    };
+    const title = payload.title?.trim() ?? "";
+    const content = payload.content?.trim() ?? "";
+
+    if (!title) {
+      return Response.json({ error: "title is required" }, { status: 400 });
+    }
+
+    const db = getDb();
+    const [note] = await db.insert(notes).values({ title, content }).returning();
+    return Response.json({ note }, { status: 201 });
+  } catch (error) {
+    return Response.json(
+      { error: toRouteErrorMessage(error) },
+      { status: 500 }
+    );
+  }
+}
+
+===== FIN: examples/d1/app/api/notes/route.ts =====
+
+
+===== ARCHIVO: examples/d1/db/schema.ts =====
+import { sql } from "drizzle-orm";
+import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+export const notes = sqliteTable("notes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  title: text("title").notNull(),
+  content: text("content").notNull().default(""),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
+===== FIN: examples/d1/db/schema.ts =====
+
+
+===== ARCHIVO: hooks/use-mobile.ts =====
+import * as React from "react"
+
+const MOBILE_BREAKPOINT = 768
+
+export function useIsMobile() {
+  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined)
+
+  React.useEffect(() => {
+    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
+    const onChange = () => {
+      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
+    }
+    mql.addEventListener("change", onChange)
+    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
+    return () => mql.removeEventListener("change", onChange)
+  }, [])
+
+  return !!isMobile
+}
+
+===== FIN: hooks/use-mobile.ts =====
+
+
+===== ARCHIVO: lib/client/api.ts =====
+export async function api<T>(
+  path: string,
+  body?: unknown,
+  csrf?: string,
+  signal?: AbortSignal,
+): Promise<T> {
+  const res = await fetch(`/api/${path}`, {
+    method: body === undefined ? "GET" : "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    signal,
+    headers: {
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(csrf ? { "X-CSRF-Token": csrf } : {}),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const value = (await res.json()) as T & { error?: string; code?: string };
+  if (!res.ok)
+    throw new Error(
+      `${value.error ?? "Error de comunicación"} (${value.code ?? res.status})`,
+    );
+  return value;
+}
+export type Config = {
+  mode: "demo" | "real";
+  transport: "demo" | "http" | "telegram";
+  artist: string;
+  artistId: string;
+  participants: { id: string; label: string; phone: string }[];
+  realConfigured: boolean;
+};
+export type Session = {
+  id: string;
+  csrf: string;
+  mode: "demo" | "real";
+  expires: number;
+};
+
+===== FIN: lib/client/api.ts =====
+
+
+===== ARCHIVO: lib/client/automatic-lookup.ts =====
+import { canInsert, normalizePhone, type Context } from "../domain.ts";
+
+export function eligiblePhone(
+  text: string,
+  allowed: ReadonlySet<string>,
+): string | null {
+  try {
+    const phone = normalizePhone(text);
+    return allowed.has(phone) ? phone : null;
+  } catch {
+    return null;
+  }
+}
+
+// Only memory: neither responses nor the attempt ledger belong in PWA storage.
+export class AutomaticLookup {
+  private attempted = new Set<string>();
+  private staged: { context: Context; block: string } | null = null;
+  private holding: Context | null = null;
+  startHold(context: Context) {
+    this.holding = { ...context };
+  }
+  release() {
+    this.holding = null;
+  }
+  reserve(context: Context, phone: string): boolean {
+    const key = JSON.stringify([context.sessionId, context.noteId, phone]);
+    if (this.attempted.has(key) || this.attempted.size >= 200) return false;
+    this.attempted.add(key);
+    return true;
+  }
+  stage(context: Context, block: string) {
+    this.staged = { context: { ...context }, block };
+  }
+  result(current: Context): string | null {
+    const value = this.staged;
+    if (!value) return null;
+    if (!canInsert(value.context, current)) {
+      this.discard();
+      return null;
+    }
+    return value.block;
+  }
+  peek(current: Context): string | null {
+    return this.holding && canInsert(this.holding, current)
+      ? this.result(current)
+      : null;
+  }
+  clearResult() {
+    this.staged = null;
+  }
+  discard() {
+    this.staged = null;
+    this.holding = null;
+  }
+  reset() {
+    this.discard();
+    this.attempted.clear();
+  }
+}
+
+===== FIN: lib/client/automatic-lookup.ts =====
+
+
+===== ARCHIVO: lib/client/editor-history.ts =====
+export type Snapshot = { text: string; start: number; end: number };
+/** Memory-only, per editor. Browser undo grouping varies between engines. */
+export class EditorHistory<S extends Snapshot = Snapshot> {
+  current: S;
+  past: S[] = [];
+  future: S[] = [];
+  constructor(initial: S) {
+    this.current = initial;
+  }
+  get depth() {
+    return this.past.length;
+  }
+  get size() {
+    return this.past.reduce((n, s) => n + s.text.length, 0);
+  }
+  record(next: S, previous?: S) {
+    if (next.text === this.current.text) {
+      this.current = next;
+      return;
+    }
+    this.past.push(previous ?? this.current);
+    this.future = [];
+    this.current = next;
+    while (this.past.length > 1 && (this.depth > 50 || this.size > 200000))
+      this.past.shift();
+  }
+  undo() {
+    const previous = this.past.pop();
+    if (!previous) return null;
+    this.future.push(this.current);
+    this.current = previous;
+    return previous;
+  }
+  redo() {
+    const next = this.future.pop();
+    if (!next) return null;
+    this.past.push(this.current);
+    this.current = next;
+    return next;
+  }
+}
+
+===== FIN: lib/client/editor-history.ts =====
+
+
+===== ARCHIVO: lib/client/notes.ts =====
+export type Note = {
+  id: string;
+  text: string;
+  pinned: boolean;
+  updated: number;
+  volatile?: boolean;
+  // In-memory link to an ordinary original; never persisted with performance content.
+  sourceId?: string;
+  deleted?: number;
+};
+const STORAGE = "notas-escena.ordinary.v1";
+export function seeds(now = Date.now()): Note[] {
+  return [
+    [
+      "Ideas para el sábado",
+      "Una libreta, una mesa y un poco de imaginación.",
+      0,
+      true,
+    ],
+    [
+      "La maleta azul",
+      "Revisar la luz y preparar el cuaderno antes de salir.",
+      3,
+      true,
+    ],
+    [
+      "Pequeños recordatorios",
+      "Respirar. Escuchar. Disfrutar del momento.",
+      12,
+      true,
+    ],
+    [
+      "Un paseo por el mar",
+      "Buscar un lugar tranquilo para ver el atardecer.",
+      1,
+      false,
+    ],
+    [
+      "Lista de cosas bonitas",
+      "El olor del café y una canción que vuelve.",
+      1,
+      false,
+    ],
+    ["Destellos ✨", "A veces una idea cabe en una sola línea.", 3, false],
+    [
+      "El próximo viaje",
+      "Dejar un día libre para perderse por las calles.",
+      5,
+      false,
+    ],
+    ["Recetas de otoño", "Sopa de calabaza, pan tostado y romero.", 15, false],
+  ].map(([title, body, days, pinned]) => ({
+    id: crypto.randomUUID(),
+    text: `${title}\n${body}`,
+    pinned: !!pinned,
+    updated: now - Number(days) * 86400000,
+  }));
+}
+export function loadNotes(): Note[] {
+  try {
+    const value = localStorage.getItem(STORAGE);
+    if (value === null) return seeds();
+    const list = JSON.parse(value);
+    if (!Array.isArray(list)) return seeds();
+    const seen = new Set<string>();
+    return list
+      .filter(
+        (n) =>
+          n &&
+          typeof n.id === "string" &&
+          n.id.length > 0 &&
+          n.id.length <= 100 &&
+          !seen.has(n.id) &&
+          typeof n.text === "string" &&
+          n.text.length <= 20000 &&
+          typeof n.updated === "number" &&
+          Number.isFinite(n.updated) &&
+          Math.abs(n.updated) <= 8.64e15 &&
+          (!n.deleted ||
+            (Number.isFinite(n.deleted) &&
+              n.deleted > Date.now() - 30 * 86400000 &&
+              n.deleted <= Date.now())) &&
+          (seen.add(n.id), true),
+      )
+      .slice(0, 400)
+      .map((n) => ({
+        id: n.id,
+        text: n.text,
+        pinned: !!n.pinned,
+        updated: n.updated,
+        ...(n.deleted ? { deleted: n.deleted } : {}),
+      }));
+  } catch {
+    return seeds();
+  }
+}
+export class NoteConflict extends Error {
+  constructor() {
+    super(
+      "Esta nota cambió en otra pestaña. Tu borrador sigue visible; conserva su texto antes de recargar.",
+    );
+  }
+}
+function sameNote(a: Note | undefined, b: Note | undefined) {
+  return (
+    a?.id === b?.id &&
+    a?.text === b?.text &&
+    a?.pinned === b?.pinned &&
+    a?.updated === b?.updated &&
+    a?.deleted === b?.deleted
+  );
+}
+export function mergeOrdinaryNotes(
+  base: Note[],
+  next: Note[],
+  stored: Note[],
+): Note[] {
+  const old = new Map(base.map((n) => [n.id, n]));
+  const desired = new Map(next.map((n) => [n.id, n]));
+  const merged = new Map(stored.map((n) => [n.id, n]));
+  for (const id of new Set([...old.keys(), ...desired.keys()])) {
+    const before = old.get(id),
+      after = desired.get(id),
+      current = merged.get(id);
+    if (sameNote(before, after)) continue;
+    if (!sameNote(current, before) && !sameNote(current, after))
+      throw new NoteConflict();
+    if (after) merged.set(id, after);
+    else merged.delete(id);
+  }
+  return [...merged.values()];
+}
+export function persistNotes(notes: Note[], base?: Note[]): Note[] {
+  const ordinary = notes.filter((n) => !n.volatile);
+  const saved =
+    base && localStorage.getItem(STORAGE) !== null
+      ? mergeOrdinaryNotes(base, ordinary, loadNotes())
+      : ordinary;
+  localStorage.setItem(
+    STORAGE,
+    JSON.stringify(
+      saved.map(({ id, text, pinned, updated, deleted }) => ({
+        id,
+        text,
+        pinned,
+        updated,
+        ...(deleted ? { deleted } : {}),
+      })),
+    ),
+  );
+  return saved;
+}
+export function title(n: Note) {
+  return n.text.split("\n")[0]?.trim() || "Nueva nota";
+}
+export function excerpt(n: Note) {
+  return n.text.split("\n").slice(1).join(" ").trim() || "Sin texto adicional";
+}
+
+const calendar = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Europe/Andorra",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+const timeFormatter = new Intl.DateTimeFormat("es", {
+  timeZone: "Europe/Andorra",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+const weekdayFormatter = new Intl.DateTimeFormat("es", {
+  timeZone: "Europe/Andorra",
+  weekday: "long",
+});
+const dateFormatter = new Intl.DateTimeFormat("es", {
+  timeZone: "Europe/Andorra",
+  day: "numeric",
+  month: "numeric",
+  year: "2-digit",
+});
+function dayIndex(time: number) {
+  const parts = calendar.formatToParts(time);
+  const v = (k: string) => Number(parts.find((p) => p.type === k)?.value);
+  return Math.floor(Date.UTC(v("year"), v("month") - 1, v("day")) / 86400000);
+}
+export function groups(notes: Note[], now = Date.now()) {
+  const labels = [
+    "Fijadas",
+    "Hoy",
+    "Ayer",
+    "Últimos 7 días",
+    "Últimos 30 días",
+    "Anteriores",
+  ];
+  const map = new Map(labels.map((l) => [l, [] as Note[]]));
+  const today = dayIndex(now);
+  for (const note of [...notes]
+    .filter((n) => !n.deleted)
+    .sort((a, b) => b.updated - a.updated)) {
+    const days = today - dayIndex(note.updated);
+    const group = note.pinned
+      ? "Fijadas"
+      : days <= 0
+        ? "Hoy"
+        : days === 1
+          ? "Ayer"
+          : days < 7
+            ? "Últimos 7 días"
+            : days < 30
+              ? "Últimos 30 días"
+              : "Anteriores";
+    map.get(group)!.push(note);
+  }
+  return [...map].filter(([, items]) => items.length);
+}
+export function dateLabel(time: number) {
+  const days = dayIndex(Date.now()) - dayIndex(time);
+  if (days === 0) return timeFormatter.format(time);
+  if (days === 1) return "ayer";
+  if (days < 7) return weekdayFormatter.format(time);
+  return dateFormatter.format(time);
+}
+export function findNotes(notes: Note[], term: string) {
+  const fold = (s: string) =>
+    s
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLocaleLowerCase("es");
+  const needle = fold(term);
+  return notes.filter((n) => !n.deleted && fold(n.text).includes(needle));
+}
+
+export function deleteNote(
+  notes: Note[],
+  id: string,
+  now = Date.now(),
+): Note[] {
+  const selected = notes.find((n) => n.id === id);
+  if (!selected) return notes;
+  const originalId = selected.sourceId ?? id;
+  return notes.flatMap((n) => {
+    if (n.volatile && (n.id === id || n.sourceId === originalId)) return [];
+    if (n.id === originalId) return [{ ...n, deleted: now }];
+    return [n];
+  });
+}
+export function restoreNote(notes: Note[], id: string): Note[] {
+  return notes.map((n) => {
+    if (n.id !== id) return n;
+    const restored = { ...n };
+    delete restored.deleted;
+    return restored;
+  });
+}
+
+===== FIN: lib/client/notes.ts =====
+
+
+===== ARCHIVO: lib/client/use-keyboard-viewport.ts =====
+import { useEffect } from "react";
+
+export function useKeyboardViewport() {
+  useEffect(() => {
+    let frame = 0;
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const v = window.visualViewport;
+        // Pinch zoom changes the viewport too; it must keep normal page panning.
+        const inset =
+          v && v.scale === 1
+            ? Math.max(0, innerHeight - v.height - v.offsetTop)
+            : 0;
+        document.documentElement.style.setProperty(
+          "--keyboard-inset",
+          `${inset}px`,
+        );
+        document.documentElement.classList.toggle("keyboard-open", inset > 100);
+      });
+    };
+    const keyboard = (e: KeyboardEvent) => {
+      if (e.key === "Tab")
+        document.documentElement.classList.add("keyboard-navigation");
+    };
+    const pointer = () =>
+      document.documentElement.classList.remove("keyboard-navigation");
+    window.addEventListener("keydown", keyboard);
+    window.addEventListener("pointerdown", pointer);
+    update();
+    window.visualViewport?.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("scroll", update);
+    window.addEventListener("resize", update);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", keyboard);
+      window.removeEventListener("pointerdown", pointer);
+      window.visualViewport?.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+}
+
+===== FIN: lib/client/use-keyboard-viewport.ts =====
+
+
+===== ARCHIVO: lib/client/version.ts =====
+export const APP_VERSION = "0.2.1";
+
+===== FIN: lib/client/version.ts =====
+
+
+===== ARCHIVO: lib/connector-context.ts =====
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { ConnectorBinding } from "./connector-contract.mjs";
+
+// Capture the trusted capability before Vinext derives its revalidation context,
+// which does not retain custom execution-context props. Never share across requests.
+const bindings = new AsyncLocalStorage<ConnectorBinding | undefined>();
+
+export function runWithConnectorBinding<T>(
+  binding: ConnectorBinding | undefined,
+  run: () => T,
+): T {
+  return bindings.run(binding, run);
+}
+
+export function getConnectorBinding(): ConnectorBinding | undefined {
+  return bindings.getStore();
+}
+
+===== FIN: lib/connector-context.ts =====
+
+
+===== ARCHIVO: lib/connector-contract.mts =====
+export type Json =
+  | null
+  | boolean
+  | number
+  | string
+  | Json[]
+  | { [key: string]: Json };
+
+export type ConnectorFailureStatus =
+  | "invalid_request"
+  | "request_context_expired"
+  | "reauthentication_required"
+  | "connector_access_disabled"
+  | "tool_not_found"
+  | "tool_not_allowed"
+  | "rate_limited"
+  | "tool_error"
+  | "upstream_error"
+  | "internal_error"
+  // Starter-only: no runtime capability or active local preview session.
+  | "binding_unavailable";
+
+export type ConnectorContent = {
+  content: Array<{ type: string; [key: string]: Json }>;
+  structuredContent?: Json;
+};
+
+// Matches Sites Dispatch's explicit invocation outcome, plus binding_unavailable.
+export type ConnectorResult =
+  | {
+      status: "success";
+      result: ConnectorContent;
+      requestId?: string;
+    }
+  | {
+      status: ConnectorFailureStatus;
+      message: string;
+      requestId?: string;
+      retryAfterMs?: number;
+      result?: ConnectorContent;
+    };
+
+/** A server-side binding supplied by the runtime, never by a browser. */
+export type ConnectorBinding = {
+  invoke(
+    connectorId: string,
+    actionName: string,
+    args: { [key: string]: Json },
+  ): Promise<ConnectorResult>;
+  getContext?(): Promise<ConnectorContext>;
+};
+
+/** Site policy and cached tool metadata, not authentication or provider health. */
+export type ConnectorContext =
+  | {
+      status: "success";
+      connectors: Array<{
+        connectorId: string;
+        policy: "enabled" | "disabled";
+        tools: Array<{
+          actionName: string;
+          description?: string;
+          inputSchema: Record<string, Json>;
+        }> | null;
+      }>;
+    }
+  | {
+      status:
+        | "request_context_expired"
+        | "internal_error"
+        | "binding_unavailable"
+        | "upstream_error";
+    };
+
+/** Use in a Site server route. Connection selection and credentials stay in the host. */
+export function createConnectors(binding: ConnectorBinding | undefined) {
+  return {
+    async getContext(): Promise<ConnectorContext> {
+      if (typeof window !== "undefined") {
+        throw new Error(
+          "Connected apps are only available in Site server routes.",
+        );
+      }
+      try {
+        if (!binding?.getContext) return { status: "binding_unavailable" };
+        const context = await binding.getContext();
+        if (
+          context?.status === "success" &&
+          Array.isArray(context.connectors)
+        ) {
+          return {
+            status: "success",
+            connectors: context.connectors.map((connector) => {
+              if (
+                !connector ||
+                typeof connector.connectorId !== "string" ||
+                !["enabled", "disabled"].includes(connector.policy) ||
+                (connector.tools !== null && !Array.isArray(connector.tools))
+              ) {
+                throw new Error("Invalid connector context");
+              }
+              return {
+                connectorId: connector.connectorId,
+                policy: connector.policy,
+                tools:
+                  connector.tools?.map((tool) => {
+                    if (
+                      !tool ||
+                      typeof tool.actionName !== "string" ||
+                      (tool.description !== undefined &&
+                        typeof tool.description !== "string") ||
+                      !tool.inputSchema ||
+                      typeof tool.inputSchema !== "object" ||
+                      Array.isArray(tool.inputSchema)
+                    ) {
+                      throw new Error("Invalid connector tool");
+                    }
+                    return {
+                      actionName: tool.actionName,
+                      ...(tool.description !== undefined
+                        ? { description: tool.description }
+                        : {}),
+                      inputSchema: tool.inputSchema,
+                    };
+                  }) ?? null,
+              };
+            }),
+          };
+        }
+        switch (context?.status) {
+          case "request_context_expired":
+          case "internal_error":
+          case "binding_unavailable":
+          case "upstream_error":
+            return { status: context.status };
+          default:
+            return { status: "upstream_error" };
+        }
+      } catch {
+        return { status: "upstream_error" };
+      }
+    },
+    async invoke(
+      connectorId: string,
+      actionName: string,
+      args: { [key: string]: Json },
+    ): Promise<ConnectorResult> {
+      if (typeof window !== "undefined") {
+        throw new Error(
+          "Connected apps are only available in Site server routes.",
+        );
+      }
+      if (!binding) {
+        return {
+          status: "binding_unavailable",
+          message:
+            "This runtime does not provide connected apps for this request.",
+        };
+      }
+      try {
+        // Preserve the host's status, message, result and optional diagnostics.
+        // Do not replay a call after a transport failure: it may have completed.
+        return await binding.invoke(connectorId, actionName, args);
+      } catch {
+        return {
+          status: "upstream_error",
+          message:
+            "The app did not return a confirmed result. The action may have completed; check before trying again.",
+        };
+      }
+    },
+  };
+}
+
+===== FIN: lib/connector-contract.mts =====
+
+
+===== ARCHIVO: lib/connector-errors.mts =====
+import { z } from "zod/v4";
+
+/** Validate and project runtime results onto the public connector response. */
+export function connectorResponse(result: unknown): Response {
+  try {
+    // Keep server-only parsing lazy so client recovery UI can tree-shake it out.
+    const requestId = z
+      .string()
+      .regex(/^[A-Za-z0-9._:-]{1,128}$/)
+      .optional()
+      .catch(undefined);
+    const envelope = {
+      error: z.never().optional(),
+      content: z.never().optional(),
+      structuredContent: z.never().optional(),
+      isError: z.never().optional(),
+      requestId,
+    };
+    const content = z.object({
+      content: z.array(z.object({ type: z.string() }).catchall(z.json())),
+      structuredContent: z.json().optional(),
+      isError: z.never().optional(),
+      error: z.never().optional(),
+    });
+    const failure = z.object({
+      ...envelope,
+      status: z
+        .string()
+        .min(1)
+        .refine((value) => value !== "success"),
+      message: z.string().min(1),
+      retryAfterMs: z.number().int().nonnegative().safe().optional(),
+      result: content.optional(),
+    });
+    const success = z.object({
+      ...envelope,
+      status: z.literal("success"),
+      result: content,
+      message: z.never().optional(),
+      retryAfterMs: z.never().optional(),
+    });
+    const schema =
+      result !== null &&
+      typeof result === "object" &&
+      "status" in result &&
+      result.status === "success"
+        ? success
+        : failure;
+    const parsed = schema.safeParse(result);
+    if (parsed.success) {
+      // As in the binding contract, JSON status determines the outcome.
+      return Response.json(parsed.data, {
+        headers: { "Cache-Control": "private, no-store" },
+      });
+    }
+  } catch {
+    // Cyclic or otherwise non-serializable runtime values are also unconfirmed.
+  }
+  return Response.json(
+    {
+      status: "upstream_error",
+      message:
+        "The app did not return a confirmed result. The action may have completed; check before trying again.",
+    },
+    { status: 502, headers: { "Cache-Control": "private, no-store" } },
+  );
+}
+
+/** Presentation only. The caller supplies the starter's server-generated SIWC URL. */
+export function connectorErrorRecovery(
+  error: { status: string; message: string },
+  connectorName: string,
+  reconnectHref: string,
+): { message: string; action?: { label: string; href: string } } {
+  if (error.status === "reauthentication_required") {
+    return {
+      message: error.message,
+      action: { label: `Connect ${connectorName}`, href: reconnectHref },
+    };
+  }
+  // Other outcomes do not prove that consent is missing or that replay is safe.
+  return { message: error.message };
+}
+
+===== FIN: lib/connector-errors.mts =====
+
+
+===== ARCHIVO: lib/connector-preview.d.ts =====
+declare module "virtual:sites-connector-preview" {
+  const binding: import("./connector-contract.mjs").ConnectorBinding;
+  export default binding;
+}
+
+// Only the local preview uses an environment binding. Hosted Sites receive the
+// request-scoped capability through ctx.props.CONNECTORS in sites-worker.ts.
+declare namespace Cloudflare {
+  interface Env {
+    CONNECTORS?: import("./connector-contract.mjs").ConnectorBinding;
+  }
+}
+
+===== FIN: lib/connector-preview.d.ts =====
+
+
+===== ARCHIVO: lib/connectors.ts =====
+import { createConnectors } from "./connector-contract.mjs";
+import { getConnectorBinding } from "./connector-context";
+
+/** Keep invocation context on this request; never cache it across visitors. */
+export function connectorsForRequest() {
+  return createConnectors(getConnectorBinding());
+}
+export type {
+  ConnectorContext,
+  ConnectorResult,
+  ConnectorFailureStatus,
+  Json,
+} from "./connector-contract.mjs";
+
+===== FIN: lib/connectors.ts =====
+
+
+===== ARCHIVO: lib/domain.ts =====
+export class AppError extends Error {
+  code: string;
+  status: number;
+  constructor(code: string, message: string, status = 400) {
+    super(message);
+    this.code = code;
+    this.status = status;
+  }
+}
+export function normalizePhone(text: string): string {
+  if (typeof text !== "string" || text.length > 20000)
+    throw new AppError(
+      "INVALID_PHONE",
+      "Escribe un único móvil español completo.",
+    );
+  const matches = [...text.matchAll(/\+?\d[\d \u00a0-]*/g)];
+  if (matches.length !== 1)
+    throw new AppError(
+      "AMBIGUOUS_PHONE",
+      "La nota debe contener un solo número, sin otras cifras.",
+    );
+  const m = matches[0];
+  const index = m.index!;
+  if (
+    /[\p{L}\d+.]/u.test(text[index - 1] ?? "") ||
+    /[\p{L}\d+.]/u.test(text[index + m[0].length] ?? "")
+  )
+    throw new AppError("INVALID_PHONE", "Número incompleto o formato ambiguo.");
+  const compact = m[0].replace(/[ \u00a0-]/g, "");
+  const digits = compact.startsWith("+34")
+    ? compact.slice(3)
+    : compact.startsWith("0034")
+      ? compact.slice(4)
+      : compact;
+  if (!/^[67]\d{8}$/.test(digits))
+    throw new AppError(
+      "INVALID_PHONE",
+      "Usa nueve dígitos que comiencen por 6 o 7, con +34 o 0034 opcional.",
+    );
+  return "+34" + digits;
+}
+export type QueryResult = {
+  requestId: string;
+  phone: string;
+  final: true;
+  found: boolean;
+  country?: string;
+  carrier?: string;
+  name?: string;
+};
+export function validateResult(
+  value: unknown,
+  requestId: string,
+  phone: string,
+): QueryResult {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new AppError("INVALID_RESULT", "Respuesta no válida.", 502);
+  const v = value as Record<string, unknown>;
+  if (v.requestId !== requestId || v.phone !== phone)
+    throw new AppE
